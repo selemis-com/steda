@@ -646,6 +646,31 @@ mod tests {
     }
 
     #[test]
+    fn task_reference_deserialization_rejects_invalid_identity() {
+        let task_id = TaskId::from_uuid(Uuid::nil());
+
+        for task_name in ["   ".to_owned(), format!("{}é", "x".repeat(1023))] {
+            let encoded = json!({
+                "queue_name": "queue",
+                "task_name": task_name,
+                "task_id": task_id,
+            });
+            let error = serde_json::from_value::<TaskRef<Value, Value>>(encoded)
+                .expect_err("invalid task name must be rejected");
+            assert!(error.to_string().contains("task name"));
+        }
+
+        let encoded = json!({
+            "queue_name": "   ",
+            "task_name": REFERENCE_TASK.name(),
+            "task_id": task_id,
+        });
+        let error = serde_json::from_value::<TaskRef<Value, Value>>(encoded)
+            .expect_err("invalid queue name must be rejected");
+        assert!(error.to_string().contains("queue name"));
+    }
+
+    #[test]
     fn task_references_keep_same_typed_tasks_distinct_by_name() {
         let task_id = TaskId::from_uuid(Uuid::nil());
         let reference = TaskRef::from_parts(REFERENCE_TASK, "queue".to_owned(), task_id);

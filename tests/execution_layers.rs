@@ -16,9 +16,9 @@ mod tests {
     };
 
     use serde_json::{Value, json};
-    use sqlx::PgPool;
+    use sqlx::{AssertSqlSafe, PgPool};
     use steda::{
-        Error, Result, Steda, Task,
+        Error, JsonObject, Result, RunId, Steda, Task, TaskId,
         middleware::{Layer, Request, Response, Service},
     };
 
@@ -29,6 +29,9 @@ mod tests {
 
     /// Task executed on the second queue.
     const SECOND: Task<Value, Value> = Task::new("second");
+
+    /// Task used to verify execution request metadata.
+    const METADATA: Task<Value, Value> = Task::new("metadata");
 
     /// Task whose middleware panics before invoking its handler.
     const LAYER_PANIC: Task<Value, Value> = Task::new("layer-panic");
@@ -81,6 +84,76 @@ mod tests {
                 .lock()
                 .expect("observation mutex poisoned")
                 .push((request.queue_name().to_owned(), request.task_name().to_owned()));
+            self.inner.call(request)
+        }
+    }
+
+    /// Metadata observed at the middleware boundary for one execution.
+    #[derive(Clone, Debug, PartialEq)]
+    struct ExecutionObservation {
+        /// Logical task identifier observed on the request.
+        task_id: TaskId,
+        /// Claimed run identifier observed on the request.
+        run_id: RunId,
+        /// Task identifier observed through the request's task context.
+        context_task_id: TaskId,
+        /// Run identifier observed through the request's task context.
+        context_run_id: RunId,
+        /// Registered task name.
+        task_name: String,
+        /// Queue containing the task.
+        queue_name: String,
+        /// Current attempt number.
+        attempt: u32,
+        /// Application-defined task headers.
+        headers: JsonObject,
+    }
+
+    /// Records the full public execution-request metadata surface.
+    #[derive(Clone, Debug)]
+    struct MetadataLayer {
+        seen: Arc<Mutex<Vec<ExecutionObservation>>>,
+    }
+
+    impl<S> Layer<S> for MetadataLayer {
+        type Service = MetadataService<S>;
+
+        fn layer(&self, inner: S) -> Self::Service {
+            MetadataService { inner, seen: Arc::clone(&self.seen) }
+        }
+    }
+
+    /// Service produced by [`MetadataLayer`].
+    #[derive(Clone, Debug)]
+    struct MetadataService<S> {
+        inner: S,
+        seen: Arc<Mutex<Vec<ExecutionObservation>>>,
+    }
+
+    impl<S> Service<Request> for MetadataService<S>
+    where
+        S: Service<Request, Response = Response, Error = Error>,
+    {
+        type Response = Response;
+        type Error = Error;
+        type Future = S::Future;
+
+        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+            self.inner.poll_ready(cx)
+        }
+
+        fn call(&mut self, request: Request) -> Self::Future {
+            let context = request.context();
+            self.seen.lock().expect("metadata mutex poisoned").push(ExecutionObservation {
+                task_id: request.task_id(),
+                run_id: request.run_id(),
+                context_task_id: context.task_id(),
+                context_run_id: context.run_id(),
+                task_name: request.task_name().to_owned(),
+                queue_name: request.queue_name().to_owned(),
+                attempt: request.attempt(),
+                headers: request.headers().clone(),
+            });
             self.inner.call(request)
         }
     }
@@ -160,6 +233,52 @@ mod tests {
 
         first.delete().await?;
         second.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn execution_layer_receives_complete_request_metadata(pool: PgPool) -> Result<()> {
+        let queue_name = unique_queue("layer_metadata");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let steda =
+            Steda::builder(pool.clone()).layer(MetadataLayer { seen: Arc::clone(&seen) }).build();
+        let queue = steda.queue(queue_name.clone())?;
+        queue.create().await?;
+        let worker = queue.worker().task(METADATA, echo).build()?;
+
+        let mut headers = JsonObject::new();
+        headers.insert("trace_id".to_owned(), json!("trace-123"));
+        let spawned = queue.spawn(METADATA, json!({"value": 7})).headers(headers.clone()).await?;
+        run_worker_for_claims(&worker, queue.metrics(), 1).await?;
+        assert_eq!(spawned.result().await?, json!({"value": 7}));
+
+        let task_table = format!("tasks_{queue_name}");
+        let query = format!("SELECT last_attempt_run FROM steda.{task_table} WHERE id = $1");
+        let persisted_run_id: RunId = sqlx::query_scalar(AssertSqlSafe(query))
+            .bind(spawned.task_id())
+            .fetch_one(&pool)
+            .await?;
+
+        let observed = {
+            let seen = seen.lock().expect("metadata mutex poisoned");
+            seen.clone()
+        };
+        assert_eq!(observed.len(), 1);
+        assert_eq!(
+            observed[0],
+            ExecutionObservation {
+                task_id: spawned.task_id(),
+                run_id: persisted_run_id,
+                context_task_id: spawned.task_id(),
+                context_run_id: persisted_run_id,
+                task_name: METADATA.name().to_owned(),
+                queue_name: queue_name.clone(),
+                attempt: 1,
+                headers,
+            }
+        );
+
+        queue.delete().await?;
         Ok(())
     }
 

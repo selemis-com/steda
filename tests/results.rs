@@ -9,11 +9,15 @@ mod worker_support;
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskId, TaskRef, TaskSnapshot};
+    use steda::{Error, Result, Steda, Task, TaskId, TaskRef, TaskResultState, TaskSnapshot};
+    use tokio::{
+        sync::{Notify, Semaphore, oneshot},
+        time::timeout,
+    };
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
@@ -95,6 +99,73 @@ mod tests {
         assert!(
             matches!(error, Error::TaskNotFound(missing_task_id) if missing_task_id == task_id)
         );
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn task_snapshot_reports_running_state(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("result_running");
+        let app = Steda::from_pool(pool).queue(queue)?;
+        app.create().await?;
+
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Semaphore::new(0));
+        let runtime = app
+            .worker()
+            .task(RESULT_PROBE, {
+                let started = started.clone();
+                let release = release.clone();
+                move |_params: Value, _ctx| {
+                    let started = started.clone();
+                    let release = release.clone();
+                    async move {
+                        started.notify_one();
+                        release
+                            .acquire()
+                            .await
+                            .map_err(|_| {
+                                Error::Other("running snapshot semaphore closed".to_owned())
+                            })?
+                            .forget();
+                        Ok(json!({"ok": true}))
+                    }
+                }
+            })
+            .build()?;
+
+        let task = app.spawn(RESULT_PROBE, json!({})).await?;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let worker = tokio::spawn(async move {
+            runtime
+                .run_until(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+
+        timeout(Duration::from_secs(5), started.notified())
+            .await
+            .map_err(|_| Error::Timeout("timed out waiting for task to start".to_owned()))?;
+
+        let snapshot = task.snapshot().await?.expect("running task must have a snapshot");
+        assert_eq!(snapshot.state(), TaskResultState::Running);
+        assert!(!snapshot.is_terminal());
+        assert!(matches!(snapshot, TaskSnapshot::Running));
+
+        release.add_permits(1);
+        assert_eq!(task.result_with_timeout(Duration::from_secs(5)).await?, json!({"ok": true}));
+
+        shutdown_tx
+            .send(())
+            .map_err(|_| Error::Other("worker shutdown receiver dropped".to_owned()))?;
+        timeout(Duration::from_secs(5), worker)
+            .await
+            .map_err(|_| {
+                Error::Timeout("worker did not stop after running snapshot test".to_owned())
+            })?
+            .map_err(|err| Error::Other(format!("worker task join failed: {err}")))??;
 
         app.delete().await?;
         Ok(())

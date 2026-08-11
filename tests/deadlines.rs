@@ -9,13 +9,19 @@ mod worker_support;
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
         Error, Result, RetryStrategy, RunId, Sleep, Steda, Step, Task, TaskContext, TaskId,
-        TaskSnapshot,
+        TaskResultState, TaskSnapshot,
     };
     use time::OffsetDateTime;
 
@@ -25,11 +31,15 @@ mod tests {
 
     const DATABASE_WAIT: Sleep = Sleep::new("wait");
 
+    const ABSOLUTE_WAIT: Sleep = Sleep::new("absolute-wait");
+
     const CANCEL_BEFORE_START: Task<Value, Value> = Task::new("cancel-before-start");
 
     const CHECKPOINT_ONLY: Task<Value, Value> = Task::new("checkpoint-only");
 
     const DATABASE_SLEEP: Task<Value, Value> = Task::new("database-sleep");
+
+    const SLEEP_UNTIL_REPLAY: Task<Value, Value> = Task::new("sleep-until-replay");
 
     const DEADLINE: Task<Value, Value> = Task::new("deadline");
 
@@ -308,6 +318,62 @@ mod tests {
                 .fetch_all(&pool)
                 .await?;
         assert!(claimed.is_empty());
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn sleep_until_replays_the_original_wake_time(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("sleep_until_replay");
+        let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
+        app.create().await?;
+
+        let base = OffsetDateTime::from_unix_timestamp(2_100_100_000)
+            .map_err(|err| Error::InvalidOptions(err.to_string()))?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker = app
+            .worker()
+            .task(SLEEP_UNTIL_REPLAY, {
+                let calls = Arc::clone(&calls);
+                move |_params: Value, ctx: TaskContext| {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        let invocation = calls.fetch_add(1, Ordering::SeqCst);
+                        let wake_at = if invocation == 0 {
+                            base + time::Duration::seconds(30)
+                        } else {
+                            base + time::Duration::minutes(5)
+                        };
+                        ctx.sleep_until(ABSOLUTE_WAIT, wake_at).await?;
+                        Ok(json!({"awake": true}))
+                    }
+                }
+            })
+            .build()?;
+
+        set_fake_now(&pool, base).await?;
+        let spawned = app.spawn(SLEEP_UNTIL_REPLAY, json!({})).await?;
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+
+        let sleeping = spawned.snapshot().await?.expect("sleeping task must have a snapshot");
+        assert_eq!(sleeping.state(), TaskResultState::Sleeping);
+        assert!(!sleeping.is_terminal());
+
+        let run_id = fetch_task(&pool, &queue, spawned.task_id()).await?.last_attempt_run;
+        let query = format!("SELECT available_at FROM steda.runs_{queue} WHERE id = $1");
+        let available_at: OffsetDateTime =
+            sqlx::query_scalar(AssertSqlSafe(query)).bind(run_id).fetch_one(&pool).await?;
+        assert_eq!(available_at, base + time::Duration::seconds(30));
+
+        set_fake_now(&pool, base + time::Duration::seconds(31)).await?;
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let completed = spawned.snapshot().await?.expect("completed task must have a snapshot");
+        assert_eq!(completed.state(), TaskResultState::Completed);
+        assert!(completed.is_terminal());
+        assert_eq!(completed, TaskSnapshot::Completed { result: json!({"awake": true}) });
 
         app.delete().await?;
         Ok(())

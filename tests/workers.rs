@@ -125,6 +125,50 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn worker_builder_rejects_invalid_configuration(pool: PgPool) -> Result<()> {
+        let queue = Steda::from_pool(pool).queue(unique_queue("invalid_worker_configuration"))?;
+
+        let error = queue
+            .worker()
+            .lease_duration(Duration::ZERO)
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .build()
+            .expect_err("zero lease duration must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let excessive_concurrency = usize::try_from(i32::MAX).expect("i32 must fit usize") + 1;
+        let error = queue
+            .worker()
+            .concurrency(excessive_concurrency)
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .build()
+            .expect_err("concurrency outside the PostgreSQL range must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let error =
+            queue.worker().build().expect_err("worker without task capabilities must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let error = queue
+            .worker()
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .build()
+            .expect_err("duplicate task registration must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let invalid_task: Task<Value, Value> = Task::new("   ");
+        let error = queue
+            .worker()
+            .task(invalid_task, async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .build()
+            .expect_err("invalid task names must be rejected during registration");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn terminal_claim_error_stops_claiming_and_drains_running_work(
         pool: PgPool,
     ) -> Result<()> {

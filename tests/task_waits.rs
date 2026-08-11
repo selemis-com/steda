@@ -12,7 +12,7 @@ mod tests {
     use std::time::Duration;
 
     use serde_json::{Value, json};
-    use sqlx::PgPool;
+    use sqlx::{AssertSqlSafe, PgPool};
     use steda::{Error, Result, RetryStrategy, Steda, Task, TaskContext, TaskRef, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
@@ -66,6 +66,55 @@ mod tests {
 
         assert_eq!(parent.result().await?, json!({"value": 42}));
 
+        parent_queue.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn cross_queue_wait_timeout_does_not_poison_retry(pool: PgPool) -> Result<()> {
+        let child_name = unique_queue("wait_timeout_child");
+        let parent_name = unique_queue("wait_timeout_parent");
+        let steda = Steda::from_pool(pool.clone());
+        let child_queue = steda.queue(child_name)?;
+        let parent_queue = steda.queue(parent_name.clone())?;
+        child_queue.create().await?;
+        parent_queue.create().await?;
+
+        let child_worker = child_queue
+            .worker()
+            .task(CHILD, async |_params: Value, _ctx| Ok(json!({"value": 42})))
+            .build()?;
+        let parent_worker = parent_queue
+            .worker()
+            .task(PARENT, async |child: TaskRef<Value, Value>, ctx: TaskContext| {
+                ctx.await_task(&child).timeout(Duration::ZERO).await
+            })
+            .build()?;
+
+        let child = child_queue.spawn(CHILD, json!({})).await?;
+        let parent = parent_queue
+            .spawn(PARENT, child.task_ref())
+            .max_attempts(2)
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
+            .await?;
+
+        run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;
+        assert_eq!(parent.snapshot().await?, Some(TaskSnapshot::Pending));
+
+        let checkpoint_table = format!("checkpoints_{parent_name}");
+        let query = format!("SELECT count(*) FROM steda.{checkpoint_table} WHERE task_id = $1");
+        let checkpoint_count: i64 = sqlx::query_scalar(AssertSqlSafe(query))
+            .bind(parent.task_id())
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(checkpoint_count, 0);
+
+        run_worker_for_claims(&child_worker, child_queue.metrics(), 1).await?;
+        assert_eq!(child.result().await?, json!({"value": 42}));
+        run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;
+        assert_eq!(parent.result().await?, json!({"value": 42}));
+
+        child_queue.delete().await?;
         parent_queue.delete().await?;
         Ok(())
     }

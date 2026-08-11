@@ -146,6 +146,58 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn spawn_rejects_invalid_public_options(pool: PgPool) -> Result<()> {
+        let queue = Steda::from_pool(pool).queue(unique_queue("invalid_spawn_options"))?;
+
+        let error = queue
+            .spawn(UNREGISTERED_IDEM, json!({}))
+            .max_attempts(0)
+            .await
+            .expect_err("zero max_attempts must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let error = queue
+            .spawn(UNREGISTERED_IDEM, json!({}))
+            .max_attempts(u32::MAX)
+            .await
+            .expect_err("max_attempts outside the PostgreSQL range must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let error = queue
+            .spawn(UNREGISTERED_IDEM, json!({}))
+            .idempotency_key("   ")
+            .await
+            .expect_err("blank idempotency key must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let error = queue
+                .spawn(UNREGISTERED_IDEM, json!({}))
+                .retry_strategy(RetryStrategy::exponential(Duration::ZERO, factor, None))
+                .await
+                .expect_err("invalid exponential retry factor must be rejected");
+            assert!(matches!(error, Error::InvalidOptions(_)));
+        }
+
+        let excessive_delay = Duration::from_secs(i32::MAX as u64 + 1);
+        let error = queue
+            .spawn(UNREGISTERED_IDEM, json!({}))
+            .retry_strategy(RetryStrategy::fixed(excessive_delay))
+            .await
+            .expect_err("retry delays outside the PostgreSQL range must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        let error = queue
+            .spawn(UNREGISTERED_IDEM, json!({}))
+            .retry_strategy(RetryStrategy::exponential(Duration::ZERO, 2.0, Some(excessive_delay)))
+            .await
+            .expect_err("maximum retry delay outside the PostgreSQL range must be rejected");
+        assert!(matches!(error, Error::InvalidOptions(_)));
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn spawn_respects_default_and_explicit_attempt_budgets(pool: PgPool) -> Result<()> {
         let queue = unique_queue("spawn_attempts");
         let app = Steda::from_pool(pool).queue(queue.clone())?;
