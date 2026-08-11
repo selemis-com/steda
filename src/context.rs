@@ -17,10 +17,17 @@ use crate::{
     error::{Error, Result, map_sqlx_error},
     queue::validate_queue_name,
     types::{ClaimedTask, Json, JsonObject, RunId, TaskId, TaskResultSnapshot},
+    workflow::{Sleep, Step},
 };
 
-/// Maximum persisted checkpoint name length in UTF-8 bytes.
-const MAX_STEP_NAME_BYTES: usize = 1024;
+/// Maximum user-defined durable workflow identity length in UTF-8 bytes.
+const MAX_WORKFLOW_NAME_BYTES: usize = 1024;
+/// Internal namespace for typed result-bearing steps.
+const STEP_PREFIX: &str = "$step:";
+/// Internal namespace for durable sleeps.
+const SLEEP_PREFIX: &str = "$sleep:";
+/// Internal namespace for cross-task result waits.
+const TASK_WAIT_PREFIX: &str = "$await-task:";
 
 /// Durable execution context for the currently claimed task attempt.
 ///
@@ -148,10 +155,10 @@ impl TaskContext {
 
     /// Execute a durable step with checkpointing.
     ///
-    /// `name` is the stable identity of the step for the lifetime of the logical
-    /// task. Reusing the same name returns the committed value instead of
-    /// executing `f` again. Cloned contexts serialize execution of the same name
-    /// locally; different names may execute concurrently.
+    /// [`Step`] is the stable identity of the step for the lifetime of the logical
+    /// task. Reusing the same step returns the committed value instead of
+    /// executing `f` again. Cloned contexts serialize execution of the same step
+    /// locally; different steps may execute concurrently.
     ///
     /// A checkpoint prevents repeated Steda step execution after a retry, but it
     /// cannot make external side effects exactly-once. External systems should
@@ -159,34 +166,24 @@ impl TaskContext {
     ///
     /// # Errors
     ///
-    /// Returns an error if the name is invalid, the step function fails, or the
+    /// Returns an error if the step identity is invalid, the step function fails, or the
     /// checkpoint cannot be persisted or deserialized.
-    pub async fn step<T, F, Fut>(&self, name: &str, f: F) -> Result<T>
+    pub async fn step<S, F, Fut>(&self, _step: S, f: F) -> Result<S::Output>
     where
-        T: Serialize + DeserializeOwned + Send + 'static,
+        S: Step,
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<T>> + Send,
+        Fut: Future<Output = Result<S::Output>> + Send,
     {
-        validate_step_name(name)?;
-        let step_lock = self.step_lock(name);
-        let _guard = step_lock.lock().await;
-
-        if let Some(state) = self.cached_checkpoint(name) {
-            return Ok(serde_json::from_value(state)?);
-        }
-
-        let value = f().await?;
-        let serialized = serde_json::to_value(&value)?;
-        let (checkpoint_state, written) = self.persist_checkpoint(name, serialized).await?;
-        if written { Ok(value) } else { Ok(serde_json::from_value(checkpoint_state)?) }
+        let name = workflow_storage_name(STEP_PREFIX, S::NAME)?;
+        self.checkpoint(&name, f).await
     }
 
     /// Durably suspend this logical task for `duration`.
     ///
-    /// The wake time is checkpointed under `name`. When the wake time is still in the future,
-    /// Steda persists the run as sleeping and releases the worker claim. A later worker invokes
-    /// the handler from the beginning; reaching the same named sleep reuses the persisted wake
-    /// time instead of starting a new delay.
+    /// The wake time is checkpointed under the [`Sleep`] identity. When the wake time is still in
+    /// the future, Steda persists the run as sleeping and releases the worker claim. A later
+    /// worker invokes the handler from the beginning; reaching the same durable sleep reuses
+    /// the persisted wake time instead of starting a new delay.
     ///
     /// No Rust future or process-local state is retained while the task sleeps.
     ///
@@ -195,20 +192,20 @@ impl TaskContext {
     /// Returns [`Error::Suspended`] when the current attempt has been durably suspended,
     /// [`Error::Cancelled`] if a durable cancellation deadline wins, or another error if the
     /// duration cannot be represented or checkpoint/scheduling state cannot be persisted.
-    pub async fn sleep_for(&self, name: &str, duration: StdDuration) -> Result<()> {
+    pub async fn sleep_for<S: Sleep>(&self, _sleep: S, duration: StdDuration) -> Result<()> {
         let duration = SignedDuration::try_from(duration)
             .map_err(|err| Error::InvalidOptions(err.to_string()))?;
         let now = self.database_time().await?;
         let wake_at = now
             .checked_add(duration)
             .ok_or_else(|| Error::InvalidOptions("sleep wake time is out of range".to_owned()))?;
-        self.sleep_until(name, wake_at).await
+        self.sleep_until_inner::<S>(wake_at).await
     }
 
     /// Durably suspend this logical task until `wake_at`.
     ///
-    /// The first call for `name` commits the wake time as durable workflow state. Replays use
-    /// that committed time even if subsequent handler invocations pass a different `wake_at`.
+    /// The first call for this [`Sleep`] commits the wake time as durable workflow state. Replays
+    /// use that committed time even if subsequent handler invocations pass a different `wake_at`.
     /// This keeps a retry from accidentally extending the sleep window.
     ///
     /// If the wake time has already arrived, the method returns `Ok(())` and execution
@@ -219,16 +216,21 @@ impl TaskContext {
     /// Returns [`Error::Suspended`] when the current attempt has been durably suspended,
     /// [`Error::Cancelled`] if a durable cancellation deadline wins, or another error if the
     /// checkpoint cannot be read, written, or deserialized.
-    pub async fn sleep_until(&self, name: &str, wake_at: OffsetDateTime) -> Result<()> {
-        validate_step_name(name)?;
-        let step_lock = self.step_lock(name);
+    pub async fn sleep_until<S: Sleep>(&self, _sleep: S, wake_at: OffsetDateTime) -> Result<()> {
+        self.sleep_until_inner::<S>(wake_at).await
+    }
+
+    /// Shared durable-sleep implementation after the marker value has established its type.
+    async fn sleep_until_inner<S: Sleep>(&self, wake_at: OffsetDateTime) -> Result<()> {
+        let name = workflow_storage_name(SLEEP_PREFIX, S::NAME)?;
+        let step_lock = self.step_lock(&name);
         let _guard = step_lock.lock().await;
 
-        let actual_wake_at = if let Some(cached) = self.cached_checkpoint(name) {
+        let actual_wake_at = if let Some(cached) = self.cached_checkpoint(&name) {
             serde_json::from_value(cached)?
         } else {
             let serialized = serde_json::to_value(wake_at)?;
-            let (checkpoint_state, _) = self.persist_checkpoint(name, serialized).await?;
+            let (checkpoint_state, _) = self.persist_checkpoint(&name, serialized).await?;
             serde_json::from_value(checkpoint_state)?
         };
 
@@ -241,8 +243,9 @@ impl TaskContext {
 
     /// Wait for another queue's task to reach a terminal result state.
     ///
-    /// The terminal [`TaskResultSnapshot`] is checkpointed under the configured step name, so a
-    /// later retry of this logical task replays the completed wait. Unlike a durable sleep, this
+    /// The terminal [`TaskResultSnapshot`] is checkpointed under an internal identity derived from
+    /// the target queue and task ID, so a later retry replays the completed wait. Unlike a durable
+    /// sleep, this
     /// operation keeps the current worker execution slot occupied while polling.
     ///
     /// Same-queue waits are rejected because a finite worker pool can otherwise deadlock with
@@ -257,22 +260,42 @@ impl TaskContext {
         task_id: TaskId,
         options: AwaitTaskResultOptions,
     ) -> Result<TaskResultSnapshot> {
-        let AwaitTaskResultOptions { queue, step_name, timeout } = options;
+        let AwaitTaskResultOptions { queue, timeout } = options;
         let queue = validate_queue_name(&queue)?;
         if queue == self.inner.queue_name {
             return Err(Error::InvalidOptions(
                 "TaskContext::await_task_result cannot wait on tasks in the same queue because this can deadlock workers. Spawn the child in a different queue.".to_owned(),
             ));
         }
-        let step_name = step_name.unwrap_or_else(|| format!("$awaitTaskResult:{task_id}"));
+        let checkpoint_name = format!("{TASK_WAIT_PREFIX}{queue}:{task_id}");
         let pool = self.inner.pool.clone();
-        self.step(&step_name, async move || {
+        self.checkpoint(&checkpoint_name, async move || {
             await_task_result_snapshot(&pool, &queue, task_id, timeout).await
         })
         .await
     }
 
-    /// Return the local serializer for one durable step name.
+    /// Execute or replay one checkpoint under an already-namespaced persisted identity.
+    async fn checkpoint<T, F, Fut>(&self, name: &str, f: F) -> Result<T>
+    where
+        T: Serialize + DeserializeOwned + Send + 'static,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T>> + Send,
+    {
+        let step_lock = self.step_lock(name);
+        let _guard = step_lock.lock().await;
+
+        if let Some(state) = self.cached_checkpoint(name) {
+            return Ok(serde_json::from_value(state)?);
+        }
+
+        let value = f().await?;
+        let serialized = serde_json::to_value(&value)?;
+        let (checkpoint_state, written) = self.persist_checkpoint(name, serialized).await?;
+        if written { Ok(value) } else { Ok(serde_json::from_value(checkpoint_state)?) }
+    }
+
+    /// Return the local serializer for one durable checkpoint identity.
     fn step_lock(&self, name: &str) -> Arc<AsyncMutex<()>> {
         let mut locks = self.inner.step_locks.lock().unwrap_or_else(PoisonError::into_inner);
         Arc::clone(locks.entry(name.to_owned()).or_insert_with(|| Arc::new(AsyncMutex::new(()))))
@@ -360,17 +383,17 @@ enum ScheduleOutcome {
     Cancelled,
 }
 
-/// Validate the stable durable step identifier used for checkpoints.
-fn validate_step_name(name: &str) -> Result<()> {
+/// Build the namespaced persisted key for one user-defined workflow identity.
+fn workflow_storage_name(prefix: &str, name: &str) -> Result<String> {
     if name.trim().is_empty() {
-        return Err(Error::InvalidOptions("step name must not be empty".to_owned()));
+        return Err(Error::InvalidOptions("workflow identity must not be empty".to_owned()));
     }
-    if name.len() > MAX_STEP_NAME_BYTES {
+    if name.len() > MAX_WORKFLOW_NAME_BYTES {
         return Err(Error::InvalidOptions(format!(
-            "step name must be at most {MAX_STEP_NAME_BYTES} bytes"
+            "workflow identity must be at most {MAX_WORKFLOW_NAME_BYTES} bytes"
         )));
     }
-    Ok(())
+    Ok(format!("{prefix}{name}"))
 }
 
 /// Options for waiting on another task result from a task context.
@@ -383,9 +406,6 @@ pub struct AwaitTaskResultOptions {
     /// Queue containing the awaited task.
     queue: String,
 
-    /// Optional checkpoint step name.
-    step_name: Option<String>,
-
     /// Optional timeout.
     timeout: Option<StdDuration>,
 }
@@ -394,14 +414,7 @@ impl AwaitTaskResultOptions {
     /// Create wait options for a task in `queue`.
     #[must_use]
     pub fn new(queue: impl Into<String>) -> Self {
-        Self { queue: queue.into(), step_name: None, timeout: None }
-    }
-
-    /// Override the durable checkpoint step name used for this wait.
-    #[must_use]
-    pub fn step_name(mut self, step_name: impl Into<String>) -> Self {
-        self.step_name = Some(step_name.into());
-        self
+        Self { queue: queue.into(), timeout: None }
     }
 
     /// Limit how long each execution attempt waits for the target result.

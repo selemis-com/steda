@@ -14,11 +14,27 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
-        Error, Result, RetryStrategy, RunId, Steda, Task, TaskContext, TaskId, TaskResultSnapshot,
+        Error, Result, RetryStrategy, RunId, Sleep, Steda, Step, Task, TaskContext, TaskId,
+        TaskResultSnapshot,
     };
     use time::OffsetDateTime;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
+
+    #[derive(Clone, Copy, Debug)]
+    struct LateCheckpoint;
+
+    impl Step for LateCheckpoint {
+        const NAME: &'static str = "late";
+        type Output = Value;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct DatabaseWait;
+
+    impl Sleep for DatabaseWait {
+        const NAME: &'static str = "wait";
+    }
 
     #[derive(Clone, Copy, Debug)]
     struct CancelBeforeStart;
@@ -207,7 +223,7 @@ mod tests {
         let worker = app
             .worker()
             .task::<CheckpointOnly>(async |_params: Value, ctx: TaskContext| {
-                ctx.step("late", async || Ok::<_, Error>(json!({"value": 1}))).await?;
+                ctx.step(LateCheckpoint, async || Ok::<_, Error>(json!({"value": 1}))).await?;
                 Ok(json!({"done": true}))
             })
             .build()?;
@@ -278,7 +294,7 @@ mod tests {
         let worker = app
             .worker()
             .task::<DatabaseSleep>(async |_params: Value, ctx: TaskContext| {
-                ctx.sleep_for("wait", Duration::from_secs(30)).await?;
+                ctx.sleep_for(DatabaseWait, Duration::from_secs(30)).await?;
                 Ok(json!({"awake": true}))
             })
             .build()?;
@@ -364,7 +380,7 @@ mod tests {
         let worker = app
             .worker()
             .task::<DatabaseSleep>(async |_params: Value, ctx: TaskContext| {
-                ctx.sleep_for("wait", Duration::from_secs(30)).await?;
+                ctx.sleep_for(DatabaseWait, Duration::from_secs(30)).await?;
                 Ok(json!({"awake": true}))
             })
             .build()?;

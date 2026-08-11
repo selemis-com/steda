@@ -20,9 +20,17 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, RetryStrategy, Steda, Task, TaskContext, TaskResultSnapshot};
+    use steda::{Error, Result, RetryStrategy, Steda, Step, Task, TaskContext, TaskResultSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
+
+    #[derive(Clone, Copy, Debug)]
+    struct DoubleCheckpoint;
+
+    impl Step for DoubleCheckpoint {
+        const NAME: &'static str = "double";
+        type Output = i32;
+    }
 
     #[derive(Clone, Copy, Debug)]
     struct ForgedCancelled;
@@ -120,7 +128,7 @@ mod tests {
                     let step_calls = step_calls.clone();
                     async move {
                         let value = ctx
-                            .step("double", async move || {
+                            .step(DoubleCheckpoint, async move || {
                                 step_calls.fetch_add(1, Ordering::SeqCst);
                                 Ok(params.value * 2)
                             })

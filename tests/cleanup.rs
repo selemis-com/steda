@@ -13,10 +13,20 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool};
-    use steda::{Error, QueuePolicyOptions, Result, Steda, Task, TaskContext, TaskResultSnapshot};
+    use steda::{
+        Error, QueuePolicyOptions, Result, Steda, Step, Task, TaskContext, TaskResultSnapshot,
+    };
     use tokio::time::timeout;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
+
+    #[derive(Clone, Copy, Debug)]
+    struct CleanupCheckpoint;
+
+    impl Step for CleanupCheckpoint {
+        const NAME: &'static str = "cleanup-checkpoint";
+        type Output = Value;
+    }
 
     #[derive(Clone, Copy, Debug)]
     struct CleanupRetry;
@@ -96,10 +106,8 @@ mod tests {
         let worker = app
             .worker()
             .task::<CleanupTestTask>(async |_params: Value, ctx: TaskContext| {
-                ctx.step("cleanup-checkpoint", async || {
-                    Ok::<Value, Error>(json!({"status": "done"}))
-                })
-                .await
+                ctx.step(CleanupCheckpoint, async || Ok::<Value, Error>(json!({"status": "done"})))
+                    .await
             })
             .build()?;
 

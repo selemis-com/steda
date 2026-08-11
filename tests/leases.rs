@@ -17,11 +17,19 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
-        Result, RetryStrategy, RunId, Steda, Task, TaskContext, TaskId, TaskResultSnapshot,
+        Result, RetryStrategy, RunId, Steda, Step, Task, TaskContext, TaskId, TaskResultSnapshot,
     };
     use time::OffsetDateTime;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
+
+    #[derive(Clone, Copy, Debug)]
+    struct StaleCheckpoint;
+
+    impl Step for StaleCheckpoint {
+        const NAME: &'static str = "stale-checkpoint";
+        type Output = Value;
+    }
 
     #[derive(Clone, Copy, Debug)]
     struct AlphaOnly;
@@ -211,7 +219,7 @@ mod tests {
                         force_expire_run(&pool, &queue, ctx.run_id()).await?;
 
                         let checkpoint_result: Result<Value> =
-                            ctx.step("stale-checkpoint", async || Ok(json!({"bad": true}))).await;
+                            ctx.step(StaleCheckpoint, async || Ok(json!({"bad": true}))).await;
                         let checkpoint_error =
                             checkpoint_result.expect_err("expired checkpoint must lose ownership");
                         checkpoint_rejected

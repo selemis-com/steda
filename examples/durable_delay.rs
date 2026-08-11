@@ -2,7 +2,7 @@
 //!
 //! `TaskContext::sleep_for` persists a wake time and suspends the current run. When
 //! the task becomes runnable again, a worker invokes the handler from the beginning;
-//! the named sleep replays and execution continues past it. No Rust future or stack
+//! the same `Sleep` identity replays and execution continues past it. No Rust future or stack
 //! frame survives the delay.
 
 /// Shared setup and finite-worker helpers.
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{Result, Task, TaskContext};
+use steda::{Result, Sleep, Step, Task, TaskContext};
 
 /// Input for a delayed trial reminder.
 #[derive(Debug, Deserialize, Serialize)]
@@ -39,6 +39,21 @@ impl Task for SendTrialReminder {
     type Output = ReminderSent;
 }
 
+/// Durable identity for recording the trial start.
+struct RecordTrial;
+
+impl Step for RecordTrial {
+    const NAME: &'static str = "record-trial";
+    type Output = ();
+}
+
+/// Durable identity for the reminder delay.
+struct ReminderDelay;
+
+impl Sleep for ReminderDelay {
+    const NAME: &'static str = "reminder-delay";
+}
+
 /// Run the durable-sleep example.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -49,14 +64,14 @@ async fn main() -> Result<()> {
     let worker = queue
         .worker()
         .task::<SendTrialReminder>(async |input: SendTrialReminderInput, ctx: TaskContext| {
-            ctx.step("record-trial", async || {
+            ctx.step(RecordTrial, async || {
                 println!("recorded trial start for {}", input.account_id);
                 Ok(())
             })
             .await?;
 
             println!("waiting durably before reminding {}", input.account_id);
-            ctx.sleep_for("reminder-delay", Duration::from_secs(2)).await?;
+            ctx.sleep_for(ReminderDelay, Duration::from_secs(2)).await?;
 
             println!("sending reminder for {}", input.account_id);
             Ok(ReminderSent { account_id: input.account_id, attempt: ctx.attempt() })

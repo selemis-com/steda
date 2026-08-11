@@ -20,7 +20,7 @@ use std::{
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{Error, Result, RetryStrategy, Task, TaskContext, TaskExecutor};
+use steda::{Error, Result, RetryStrategy, Step, Task, TaskContext, TaskExecutor};
 
 /// Input supplied to one isolated agent execution.
 #[derive(Debug, Deserialize, Serialize)]
@@ -58,6 +58,14 @@ impl Task for AgentTurn {
     type Output = AgentTurnOutput;
 }
 
+/// Durable identity for preparing input before entering ephemeral compute.
+struct PrepareTurn;
+
+impl Step for PrepareTurn {
+    const NAME: &'static str = "prepare-turn";
+    type Output = PreparedTurn;
+}
+
 /// Reusable long-lived provisioner used by the worker for many attempts.
 #[derive(Debug)]
 struct SandboxExecutor {
@@ -92,7 +100,7 @@ impl TaskExecutor<AgentTurn> for SandboxExecutor {
             // A real out-of-process executor can expose these TaskContext
             // capabilities to the child over its own IPC/RPC protocol.
             let prepared = context
-                .step("prepare-turn", async || {
+                .step(PrepareTurn, async || {
                     println!("preparing durable input for {}", input.session_id);
                     Ok(PreparedTurn { prompt: input.prompt.clone() })
                 })

@@ -19,10 +19,43 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
-    use steda::{Error, Result, RetryStrategy, RunId, Steda, Task, TaskContext, TaskId};
+    use steda::{
+        Error, Result, RetryStrategy, RunId, Sleep, Steda, Step, Task, TaskContext, TaskId,
+    };
     use tokio::time::sleep;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
+
+    #[derive(Clone, Copy, Debug)]
+    struct ExpensiveCheckpoint;
+
+    impl Step for ExpensiveCheckpoint {
+        const NAME: &'static str = "expensive";
+        type Output = i64;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct SharedCheckpoint;
+
+    impl Step for SharedCheckpoint {
+        const NAME: &'static str = "shared";
+        type Output = Value;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct SameCheckpoint;
+
+    impl Step for SameCheckpoint {
+        const NAME: &'static str = "same";
+        type Output = Value;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct SameSleep;
+
+    impl Sleep for SameSleep {
+        const NAME: &'static str = "same";
+    }
 
     #[derive(Clone, Copy, Debug)]
     struct CachedStep;
@@ -38,6 +71,15 @@ mod tests {
 
     impl Task for CheckpointOnly {
         const NAME: &'static str = "checkpoint-only";
+        type Input = Value;
+        type Output = Value;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct MixedWorkflowIdentity;
+
+    impl Task for MixedWorkflowIdentity {
+        const NAME: &'static str = "mixed-workflow-identity";
         type Input = Value;
         type Output = Value;
     }
@@ -73,7 +115,7 @@ mod tests {
                         let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                         let executions_for_step = step_executions.clone();
                         let value: i64 = ctx
-                            .step("expensive", async move || {
+                            .step(ExpensiveCheckpoint, async move || {
                                 executions_for_step.fetch_add(1, Ordering::SeqCst);
                                 Ok(42)
                             })
@@ -96,7 +138,7 @@ mod tests {
         assert_eq!(step_executions.load(Ordering::SeqCst), 1);
         assert_eq!(
             fetch_checkpoints(&pool, &queue, spawned.id()).await?,
-            vec![("expensive".to_owned(), json!(42))]
+            vec![("$step:expensive".to_owned(), json!(42))]
         );
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -128,12 +170,12 @@ mod tests {
                     let second_executions = Arc::clone(&executions);
                     async move {
                         let (first, second) = tokio::join!(
-                            first_ctx.step("shared", async move || {
+                            first_ctx.step(SharedCheckpoint, async move || {
                                 first_executions.fetch_add(1, Ordering::SeqCst);
                                 sleep(Duration::from_millis(50)).await;
                                 Ok::<_, Error>(json!({"source": "first"}))
                             }),
-                            second_ctx.step("shared", async move || {
+                            second_ctx.step(SharedCheckpoint, async move || {
                                 second_executions.fetch_add(1, Ordering::SeqCst);
                                 Ok::<_, Error>(json!({"source": "second"}))
                             }),
@@ -154,8 +196,38 @@ mod tests {
         let result = spawned.result().await?;
         assert_eq!(
             fetch_checkpoints(&pool, &queue, spawned.id()).await?,
-            vec![("shared".to_owned(), result["checkpoint"].clone())]
+            vec![("$step:shared".to_owned(), result["checkpoint"].clone())]
         );
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn step_and_sleep_with_same_logical_name_use_distinct_namespaces(
+        pool: PgPool,
+    ) -> Result<()> {
+        let queue = unique_queue("checkpoint_namespaces");
+        let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
+        app.create().await?;
+
+        let worker = app
+            .worker()
+            .task::<MixedWorkflowIdentity>(async |_params: Value, ctx: TaskContext| {
+                let value =
+                    ctx.step(SameCheckpoint, async || Ok::<_, Error>(json!({"value": 1}))).await?;
+                ctx.sleep_for(SameSleep, Duration::ZERO).await?;
+                Ok(value)
+            })
+            .build()?;
+
+        let spawned = app.spawn::<MixedWorkflowIdentity>(json!({})).await?;
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+
+        let checkpoints = fetch_checkpoints(&pool, &queue, spawned.id()).await?;
+        let names: Vec<_> = checkpoints.into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, vec!["$sleep:same".to_owned(), "$step:same".to_owned()]);
+        assert_eq!(spawned.result().await?, json!({"value": 1}));
 
         app.delete().await?;
         Ok(())

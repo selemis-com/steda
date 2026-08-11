@@ -119,8 +119,10 @@
 //! `PostgreSQL`. When the logical task is replayed, Steda returns the committed value and skips the
 //! body.
 //!
-//! Step names are therefore part of a workflow's durable contract. Prefer stable semantic names
-//! such as `reserve-inventory` over names derived from attempt numbers or process-local state.
+//! [`Step`] identities are therefore part of a workflow's durable contract. Define them with
+//! stable semantic names such as `reserve-inventory` rather than names derived from attempt
+//! numbers or process-local state. The `Step` marker type also fixes the checkpointed Rust value
+//! type, so workflow code passes a typed identity rather than a raw name.
 //!
 //! A checkpoint does **not** make an external side effect exactly once. A process can fail after
 //! an external API accepts a request but before Steda commits the checkpoint. On retry, the step
@@ -134,14 +136,15 @@
 //! kept alive while the task sleeps.
 //!
 //! After the wake time, a worker invokes the handler from the beginning. Earlier checkpoints
-//! replay, and when execution reaches the same named sleep, Steda observes that its durable wake
-//! time has arrived and continues. Durable sleep preserves **workflow state**, not process state.
+//! replay, and when execution reaches the same [`Sleep`] identity, Steda observes that its durable
+//! wake time has arrived and continues. Durable sleep preserves **workflow state**, not process
+//! state.
 //!
 //! ## Waiting for another task
 //!
 //! [`TaskContext::await_task_result`] waits for a terminal result in another queue and checkpoints
-//! that result under a stable step name. A completed wait can therefore replay if the parent later
-//! retries.
+//! that result under an internal identity derived from the target queue and task ID. A completed
+//! wait can therefore replay if the parent later retries.
 //!
 //! Same-queue waits are rejected because a finite worker pool could otherwise be filled entirely
 //! by parents waiting for children that need those same slots. Cross-queue waits retain the
@@ -264,6 +267,7 @@ mod steda;
 mod task;
 mod types;
 mod worker;
+mod workflow;
 
 /// Tower integration for Steda's shared task-execution boundary.
 ///
@@ -291,3 +295,4 @@ pub use types::{
     RetryStrategy, RunId, TaskId, TaskResultSnapshot, TaskResultState, Timestamp,
 };
 pub use worker::{TaskExecutor, TaskHandler, Worker, WorkerBuilder};
+pub use workflow::{Sleep, Step};

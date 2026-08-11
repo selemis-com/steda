@@ -19,7 +19,7 @@ use std::{
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{Error, Result, RetryStrategy, Task, TaskContext};
+use steda::{Error, Result, RetryStrategy, Step, Task, TaskContext};
 
 /// Input for a small order-shipping workflow.
 #[derive(Debug, Deserialize, Serialize)]
@@ -50,6 +50,22 @@ impl Task for ShipOrder {
     type Output = Shipment;
 }
 
+/// Durable identity for the inventory reservation checkpoint.
+struct ReserveInventory;
+
+impl Step for ReserveInventory {
+    const NAME: &'static str = "reserve-inventory";
+    type Output = String;
+}
+
+/// Durable identity for the payment charge checkpoint.
+struct ChargePayment;
+
+impl Step for ChargePayment {
+    const NAME: &'static str = "charge-payment";
+    type Output = String;
+}
+
 /// Executes one shipment attempt using cloned durable state handles.
 async fn ship_order(
     input: ShipOrderInput,
@@ -57,16 +73,16 @@ async fn ship_order(
     reservation_calls: Arc<AtomicUsize>,
     charge_calls: Arc<AtomicUsize>,
 ) -> Result<Shipment> {
-    // A stable step name identifies this successful value across every later attempt.
+    // A typed stable step identity owns this checkpoint across every later attempt.
     let reservation_id = ctx
-        .step("reserve-inventory", async || {
+        .step(ReserveInventory, async || {
             reservation_calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("reservation:{}", input.order_id))
         })
         .await?;
 
     let payment_id = ctx
-        .step("charge-payment", async || {
+        .step(ChargePayment, async || {
             charge_calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("charge:{}:{}", input.order_id, input.amount_cents))
         })

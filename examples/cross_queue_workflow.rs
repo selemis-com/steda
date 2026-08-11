@@ -12,7 +12,10 @@ use std::time::Duration;
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{AwaitTaskResultOptions, Error, Queue, Result, Task, TaskContext, TaskResultSnapshot};
+use steda::{
+    AwaitTaskResultOptions, Error, Queue, Result, Step, Task, TaskContext, TaskId,
+    TaskResultSnapshot,
+};
 
 /// Input for the child email task.
 #[derive(Debug, Deserialize, Serialize)]
@@ -66,6 +69,14 @@ impl Task for CompleteOrder {
     type Output = CompleteOrderOutput;
 }
 
+/// Durable identity for checkpointing child task creation.
+struct SpawnReceipt;
+
+impl Step for SpawnReceipt {
+    const NAME: &'static str = "spawn-receipt";
+    type Output = TaskId;
+}
+
 /// Completes one order workflow attempt and waits for the receipt task.
 async fn complete_order(
     input: CompleteOrderInput,
@@ -78,7 +89,7 @@ async fn complete_order(
     let child_order_id = order_id.clone();
     // Checkpoint child creation so a parent retry cannot create a second logical child.
     let child_id = ctx
-        .step("spawn-receipt", async move || {
+        .step(SpawnReceipt, async move || {
             let child = receipt_queue
                 .spawn::<EmailReceipt>(EmailReceiptInput {
                     order_id: child_order_id.clone(),
@@ -90,13 +101,11 @@ async fn complete_order(
         })
         .await?;
 
-    // The completed child result is itself checkpointed under `wait-for-receipt`.
+    // The completed child result is checkpointed under the child task reference.
     let snapshot = ctx
         .await_task_result(
             child_id,
-            AwaitTaskResultOptions::new(child_queue.name())
-                .step_name("wait-for-receipt")
-                .timeout(Duration::from_secs(10)),
+            AwaitTaskResultOptions::new(child_queue.name()).timeout(Duration::from_secs(10)),
         )
         .await?;
 

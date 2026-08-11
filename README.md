@@ -152,11 +152,20 @@ let task = queue
 
 ### Checkpointed steps
 
-`TaskContext::step` persists a successful result under a stable name:
+`TaskContext::step` persists a successful result under a typed stable identity:
 
 ```rust
+use steda::Step;
+
+struct ReserveInventory;
+
+impl Step for ReserveInventory {
+    const NAME: &'static str = "reserve-inventory";
+    type Output = Reservation;
+}
+
 let reservation = ctx
-    .step("reserve-inventory", async || {
+    .step(ReserveInventory, async || {
         inventory.reserve(&input.order_id).await
     })
     .await?;
@@ -172,8 +181,15 @@ A durable sleep persists its wake time and releases the worker claim:
 
 ```rust
 use std::time::Duration;
+use steda::Sleep;
 
-ctx.sleep_for("settlement-window", Duration::from_secs(30)).await?;
+struct SettlementWindow;
+
+impl Sleep for SettlementWindow {
+    const NAME: &'static str = "settlement-window";
+}
+
+ctx.sleep_for(SettlementWindow, Duration::from_secs(30)).await?;
 ```
 
 When the wake time arrives, execution starts again from the handler entry point. Earlier
