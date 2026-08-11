@@ -40,6 +40,19 @@ Download [`sql/steda.sql`](sql/steda.sql) and apply it to your PostgreSQL databa
 
 When upgrading Steda, apply the `steda.sql` file from the new release again.
 
+## Features
+
+Steda has no default features. TLS support for [`Steda::connect`](https://docs.rs/steda/latest/steda/struct.Steda.html#method.connect) is opt-in:
+
+- `tls-rustls` enables the SQLx rustls backend;
+- `tls-native-tls` enables the SQLx native TLS backend.
+
+```sh
+cargo add steda --features tls-rustls
+# or
+cargo add steda --features tls-native-tls
+```
+
 ## Quick start
 
 Define a task:

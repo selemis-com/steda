@@ -187,7 +187,7 @@ deny: ## Perform a `cargo deny` check.
 
 .PHONY: about
 about: ## Generate the `THIRD_PARTY_NOTICES.md` file.
-	cargo about generate -c .github/about.toml -o THIRD_PARTY_NOTICES.md .github/about.hbs --locked
+	cargo about generate -c .github/about.toml -o THIRD_PARTY_NOTICES.md .github/about.hbs --all-features --locked
 
 .PHONY: sql
 sql: ## Generate the `sql/steda.sql` file.
