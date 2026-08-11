@@ -2,15 +2,16 @@
 
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 use crate::{
-    db::{await_task_result_snapshot, duration_seconds, fetch_task_result_snapshot},
+    db::{duration_seconds, fetch_task_result_snapshot},
     error::{Error, Result, map_sqlx_error},
     execution::SharedExecutionService,
     metrics::QueueMetrics,
-    task::{Spawn, Task, TaskHandle, validate_task_name},
+    task::{Spawn, SpawnedTask, Task, TaskHandle, validate_task_name},
     types::{
         Json, QueuePolicy, QueuePolicyOptions, RetryStrategy, RunId, SpawnConfig, SpawnResult,
         TaskId, TaskResultSnapshot,
@@ -97,25 +98,33 @@ impl Queue {
     ///
     /// The returned call is awaitable directly and can be configured fluently
     /// before awaiting it.
-    pub fn spawn<T>(&self, input: T::Input) -> Spawn<'_, T>
+    pub fn spawn<Input, Output>(
+        &self,
+        task: Task<Input, Output>,
+        input: Input,
+    ) -> Spawn<'_, Input, Output>
     where
-        T: Task,
+        Input: Serialize + Send + 'static,
+        Output: serde::de::DeserializeOwned + Send + 'static,
     {
-        Spawn::new(self, input)
+        Spawn::new(self, task, input)
     }
 
     /// Serialize and persist a typed task spawn.
-    pub(crate) async fn spawn_typed<T>(
+    pub(crate) async fn spawn_typed<Input, Output>(
         &self,
-        input: T::Input,
+        task: Task<Input, Output>,
+        input: Input,
         options: SpawnConfig,
-    ) -> Result<TaskHandle<T>>
+    ) -> Result<SpawnedTask<Input, Output>>
     where
-        T: Task,
+        Input: Serialize + Send + 'static,
+        Output: serde::de::DeserializeOwned + Send + 'static,
     {
-        let spawned = self.spawn_serialized(T::NAME, serde_json::to_value(input)?, options).await?;
+        let spawned =
+            self.spawn_serialized(task.name(), serde_json::to_value(input)?, options).await?;
 
-        Ok(TaskHandle::new(self.clone(), spawned.id, spawned.created))
+        Ok(SpawnedTask::new(TaskHandle::new(self.clone(), task, spawned.task_id), spawned.created))
     }
 
     /// Persist a serialized task spawn. JSON erasure stays private to the queue boundary.
@@ -134,7 +143,7 @@ impl Queue {
 
         let row = sqlx::query(
             r#"
-            SELECT id, created
+            SELECT id AS task_id, created
             FROM steda.spawn_task($1, $2, $3, $4)
             "#,
         )
@@ -146,7 +155,7 @@ impl Queue {
         .await
         .map_err(map_sqlx_error)?;
 
-        Ok(SpawnResult { id: row.get("id"), created: row.get("created") })
+        Ok(SpawnResult { task_id: row.get("task_id"), created: row.get("created") })
     }
 
     /// Cancel a task by ID.
@@ -154,7 +163,7 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error if the database cancellation fails.
-    pub async fn cancel_task(&self, task_id: TaskId) -> Result<()> {
+    pub(crate) async fn cancel_task(&self, task_id: TaskId) -> Result<()> {
         sqlx::query("SELECT steda.cancel_task($1, $2)")
             .bind(&self.name)
             .bind(task_id)
@@ -273,22 +282,11 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error if the result snapshot cannot be fetched.
-    pub async fn fetch_task_result(&self, task_id: TaskId) -> Result<Option<TaskResultSnapshot>> {
-        fetch_task_result_snapshot(&self.pool, &self.name, task_id).await
-    }
-
-    /// Wait until a task reaches a terminal result state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the task cannot be fetched, does not exist, or the timeout elapses
-    /// before a terminal result is available.
-    pub async fn await_task_result(
+    pub(crate) async fn fetch_task_result(
         &self,
         task_id: TaskId,
-        timeout: Option<Duration>,
-    ) -> Result<TaskResultSnapshot> {
-        await_task_result_snapshot(&self.pool, &self.name, task_id, timeout).await
+    ) -> Result<Option<TaskResultSnapshot>> {
+        fetch_task_result_snapshot(&self.pool, &self.name, task_id).await
     }
 
     /// Retry a terminally failed logical task with one additional attempt.
@@ -300,8 +298,8 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error if the task is missing, is not failed, or the database retry fails.
-    pub async fn retry_task(&self, task_id: TaskId) -> Result<RunId> {
-        let run_id = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
+    pub(crate) async fn retry_task(&self, task_id: TaskId) -> Result<RunId> {
+        let run_id: RunId = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
             .bind(&self.name)
             .bind(task_id)
             .fetch_one(&self.pool)

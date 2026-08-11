@@ -13,14 +13,7 @@ mod tests {
 
     use super::common::unique_queue;
 
-    #[derive(Clone, Copy, Debug)]
-    struct ConstraintTask;
-
-    impl Task for ConstraintTask {
-        const NAME: &'static str = "constraint-task";
-        type Input = Value;
-        type Output = Value;
-    }
+    const CONSTRAINT_TASK: Task<Value, Value> = Task::new("constraint-task");
 
     fn relation_name(prefix: &str, queue: &str) -> String {
         format!("{prefix}_{queue}")
@@ -205,7 +198,7 @@ mod tests {
         let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
         app.create().await?;
 
-        let spawned = app.spawn::<ConstraintTask>(json!({})).await?;
+        let spawned = app.spawn(CONSTRAINT_TASK, json!({})).await?;
         let runs = relation_name("runs", &queue);
         let checkpoints = relation_name("checkpoints", &queue);
 
@@ -215,7 +208,7 @@ mod tests {
         assert!(
             sqlx::query(AssertSqlSafe(duplicate_attempt))
                 .bind(uuid::Uuid::now_v7())
-                .bind(spawned.id())
+                .bind(spawned.task_id())
                 .execute(&pool)
                 .await
                 .is_err()
@@ -227,7 +220,7 @@ mod tests {
         assert!(
             sqlx::query(AssertSqlSafe(second_active_attempt))
                 .bind(uuid::Uuid::now_v7())
-                .bind(spawned.id())
+                .bind(spawned.task_id())
                 .execute(&pool)
                 .await
                 .is_err()
@@ -256,11 +249,11 @@ mod tests {
                 .is_err()
         );
 
-        let other = app.spawn::<ConstraintTask>(json!({"other": true})).await?;
+        let other = app.spawn(CONSTRAINT_TASK, json!({"other": true})).await?;
         let other_run_query =
             format!("SELECT last_attempt_run FROM steda.tasks_{queue} WHERE id = $1");
         let other_run: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(other_run_query))
-            .bind(other.id())
+            .bind(other.task_id())
             .fetch_one(&pool)
             .await?;
         let tasks = relation_name("tasks", &queue);
@@ -268,7 +261,7 @@ mod tests {
             format!("UPDATE steda.{tasks} SET last_attempt_run = $2 WHERE id = $1");
         assert!(
             sqlx::query(AssertSqlSafe(mismatched_authoritative_run))
-                .bind(spawned.id())
+                .bind(spawned.task_id())
                 .bind(other_run)
                 .execute(&pool)
                 .await

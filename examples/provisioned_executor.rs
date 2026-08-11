@@ -49,22 +49,11 @@ struct AgentTurnOutput {
     response: String,
 }
 
-/// Durable task contract for one agent turn.
-struct AgentTurn;
+/// Task definition for one agent turn.
+const AGENT_TURN: Task<AgentTurnInput, AgentTurnOutput> = Task::new("agent-turn");
 
-impl Task for AgentTurn {
-    const NAME: &'static str = "agent-turn";
-    type Input = AgentTurnInput;
-    type Output = AgentTurnOutput;
-}
-
-/// Durable identity for preparing input before entering ephemeral compute.
-struct PrepareTurn;
-
-impl Step for PrepareTurn {
-    const NAME: &'static str = "prepare-turn";
-    type Output = PreparedTurn;
-}
+/// Preparation checkpoint before entering ephemeral compute.
+const PREPARE_TURN: Step<PreparedTurn> = Step::new("prepare-turn");
 
 /// Reusable long-lived provisioner used by the worker for many attempts.
 #[derive(Debug)]
@@ -80,7 +69,7 @@ impl SandboxExecutor {
     }
 }
 
-impl TaskExecutor<AgentTurn> for SandboxExecutor {
+impl TaskExecutor<AgentTurnInput, AgentTurnOutput> for SandboxExecutor {
     fn execute(
         &self,
         input: AgentTurnInput,
@@ -100,7 +89,7 @@ impl TaskExecutor<AgentTurn> for SandboxExecutor {
             // A real out-of-process executor can expose these TaskContext
             // capabilities to the child over its own IPC/RPC protocol.
             let prepared = context
-                .step(PrepareTurn, async || {
+                .step(PREPARE_TURN, async || {
                     println!("preparing durable input for {}", input.session_id);
                     Ok(PreparedTurn { prompt: input.prompt.clone() })
                 })
@@ -137,14 +126,17 @@ async fn main() -> Result<()> {
 
     // The worker is long-lived and reusable. `SandboxExecutor::execute` chooses
     // where each individual claimed attempt computes.
-    let worker = queue.worker().task_executor::<AgentTurn>(SandboxExecutor::new()).build()?;
+    let worker = queue.worker().task_executor(AGENT_TURN, SandboxExecutor::new()).build()?;
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn::<AgentTurn>(AgentTurnInput {
-            session_id: common::unique_key("session")?,
-            prompt: "Summarize the attached repository changes".to_owned(),
-        })
+        .spawn(
+            AGENT_TURN,
+            AgentTurnInput {
+                session_id: common::unique_key("session")?,
+                prompt: "Summarize the attached repository changes".to_owned(),
+            },
+        )
         .max_attempts(2)
         .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
         .await?;

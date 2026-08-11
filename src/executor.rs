@@ -58,12 +58,12 @@ pub(crate) async fn execute_task(
     let execution = TaskExecution::start(metrics);
 
     let task_executor = registry
-        .get(&task.name)
+        .get(&task.task_name)
         .map(|registered| registered.executor.clone())
         .ok_or_else(|| {
             Error::Other(format!(
                 "database returned unsupported task {:?} to capability-filtered worker",
-                task.name
+                task.task_name
             ))
         })?;
 

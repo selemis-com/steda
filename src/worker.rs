@@ -4,6 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{FutureExt, future::BoxFuture};
 use log::{error, info};
+use serde::{Serialize, de::DeserializeOwned};
 use sqlx::PgPool;
 use tokio::{task::JoinSet, time::sleep};
 use uuid::Uuid;
@@ -243,7 +244,7 @@ fn is_transient_sqlstate(code: &str) -> bool {
         || matches!(code, "55P03" | "57P01" | "57P02" | "57P03")
 }
 
-/// Executes one claimed attempt of task `T`.
+/// Executes one claimed task attempt.
 ///
 /// `TaskExecutor` is the compute boundary inside Steda's durable worker loop.
 /// The worker still owns claiming, lease supervision, cancellation observation,
@@ -259,13 +260,7 @@ fn is_transient_sqlstate(code: &str) -> bool {
 ///
 /// use steda::{Result, Task, TaskContext, TaskExecutor};
 ///
-/// struct Double;
-///
-/// impl Task for Double {
-///     const NAME: &'static str = "double";
-///     type Input = i64;
-///     type Output = i64;
-/// }
+/// const DOUBLE: Task<i64, i64> = Task::new("double");
 ///
 /// async fn in_process(input: i64, _context: TaskContext) -> Result<i64> {
 ///     Ok(input * 2)
@@ -273,7 +268,7 @@ fn is_transient_sqlstate(code: &str) -> bool {
 ///
 /// struct ProvisionedExecutor;
 ///
-/// impl TaskExecutor<Double> for ProvisionedExecutor {
+/// impl TaskExecutor<i64, i64> for ProvisionedExecutor {
 ///     fn execute(
 ///         &self,
 ///         input: i64,
@@ -283,9 +278,10 @@ fn is_transient_sqlstate(code: &str) -> bool {
 ///     }
 /// }
 ///
-/// fn accepts_executor(_executor: impl TaskExecutor<Double>) {}
+/// fn accepts_executor(_executor: impl TaskExecutor<i64, i64>) {}
 /// accepts_executor(in_process);
 /// accepts_executor(ProvisionedExecutor);
+/// let _ = DOUBLE;
 /// ```
 ///
 /// Reusable executor objects can provision compute per attempt: a
@@ -303,7 +299,7 @@ fn is_transient_sqlstate(code: &str) -> bool {
 /// executor that starts a child process, container, remote job, or other external compute
 /// must ensure dropping its future also terminates or fences that work so it cannot keep
 /// acting as the no-longer-owned attempt.
-pub trait TaskExecutor<T: Task>: Send + Sync + 'static {
+pub trait TaskExecutor<Input, Output>: Send + Sync + 'static {
     /// Execute one typed task attempt.
     ///
     /// # Errors
@@ -312,47 +308,40 @@ pub trait TaskExecutor<T: Task>: Send + Sync + 'static {
     /// durable failure and retry transition.
     fn execute(
         &self,
-        input: T::Input,
+        input: Input,
         context: TaskContext,
-    ) -> impl Future<Output = Result<T::Output>> + Send;
+    ) -> impl Future<Output = Result<Output>> + Send;
 }
 
 /// Reusable in-process async handler accepted by [`WorkerBuilder::task`].
 ///
-/// The adapter keeps the handler's concrete future type out of the builder method's generic
-/// parameter list, so callers can write `.task::<T>(...)`. Matching async functions, async
-/// closures, and reusable closures returning futures implement it automatically.
-///
-/// The handler must implement [`Fn`], not merely `FnOnce`, because one worker registration may
-/// execute many tasks and retries. Stateful handlers should keep reusable state outside each
-/// invocation and clone the required handles per call. Async closures should annotate their input
-/// and [`TaskContext`] parameters at this adapter boundary.
-pub trait TaskHandler<T: Task>:
-    Fn(T::Input, TaskContext) -> <Self as TaskHandler<T>>::Future + Send + Sync + 'static
+/// Matching async functions, async closures, and reusable closures returning futures implement
+/// this adapter automatically. The handler must implement [`Fn`], not merely `FnOnce`, because
+/// one worker registration may execute many tasks and retries.
+pub trait TaskHandler<Input, Output>:
+    Fn(Input, TaskContext) -> <Self as TaskHandler<Input, Output>>::Future + Send + Sync + 'static
 {
     /// Future returned by this handler.
-    type Future: Future<Output = Result<T::Output>> + Send + 'static;
+    type Future: Future<Output = Result<Output>> + Send + 'static;
 }
 
-impl<T, F, Fut> TaskHandler<T> for F
+impl<Input, Output, F, Fut> TaskHandler<Input, Output> for F
 where
-    T: Task,
-    F: Fn(T::Input, TaskContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<T::Output>> + Send + 'static,
+    F: Fn(Input, TaskContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Output>> + Send + 'static,
 {
     type Future = Fut;
 }
 
-impl<T, F> TaskExecutor<T> for F
+impl<Input, Output, F> TaskExecutor<Input, Output> for F
 where
-    T: Task,
-    F: TaskHandler<T>,
+    F: TaskHandler<Input, Output>,
 {
     fn execute(
         &self,
-        input: T::Input,
+        input: Input,
         context: TaskContext,
-    ) -> impl Future<Output = Result<T::Output>> + Send {
+    ) -> impl Future<Output = Result<Output>> + Send {
         (self)(input, context)
     }
 }
@@ -433,49 +422,64 @@ impl WorkerBuilder {
         self
     }
 
-    /// Declare that this worker executes task `T` with an in-process async handler.
+    /// Register one typed task with an in-process async handler.
     ///
-    /// This is the normal registration path. Async closures are supported directly;
-    /// annotate their input and [`TaskContext`] parameters so Rust can resolve the
-    /// projected task input type through the handler adapter. Use [`Self::task_executor`]
-    /// when one reusable object should decide where each attempt computes.
+    /// This is the normal registration path. The same [`Task`] value is shared by producers and
+    /// workers, so the persisted name and Rust input/output types stay together without a marker
+    /// type or runtime registry.
     #[must_use]
-    pub fn task<T>(self, handler: impl TaskHandler<T>) -> Self
+    pub fn task<Input, Output>(
+        self,
+        task: Task<Input, Output>,
+        handler: impl TaskHandler<Input, Output>,
+    ) -> Self
     where
-        T: Task,
+        Input: DeserializeOwned + Send + 'static,
+        Output: Serialize + Send + 'static,
     {
-        self.register_task_executor::<T>(handler)
+        self.register_task_executor(task, handler)
     }
 
-    /// Declare that this worker executes task `T` using a reusable [`TaskExecutor`].
+    /// Register one typed task using a reusable [`TaskExecutor`].
     ///
-    /// The executor may run the attempt in-process or provision a process, container,
-    /// sandbox, VM, Kubernetes Job, or another execution substrate. This changes only
-    /// where one attempt computes: claiming, supervision, checkpoints, retries,
-    /// cancellation, and completion still use the same Steda worker path.
+    /// The executor may run the attempt in-process or provision a process, container, sandbox,
+    /// VM, Kubernetes Job, or another execution substrate. This changes only where one attempt
+    /// computes; durability and supervision still use the same worker path.
     #[must_use]
-    pub fn task_executor<T>(self, executor: impl TaskExecutor<T>) -> Self
+    pub fn task_executor<Input, Output>(
+        self,
+        task: Task<Input, Output>,
+        executor: impl TaskExecutor<Input, Output>,
+    ) -> Self
     where
-        T: Task,
+        Input: DeserializeOwned + Send + 'static,
+        Output: Serialize + Send + 'static,
     {
-        self.register_task_executor::<T>(executor)
+        self.register_task_executor(task, executor)
     }
 
     /// Type-erase one typed executor into the worker's single task registry.
-    fn register_task_executor<T>(mut self, executor: impl TaskExecutor<T>) -> Self
+    fn register_task_executor<Input, Output>(
+        mut self,
+        task: Task<Input, Output>,
+        executor: impl TaskExecutor<Input, Output>,
+    ) -> Self
     where
-        T: Task,
+        Input: DeserializeOwned + Send + 'static,
+        Output: Serialize + Send + 'static,
     {
         if self.error.is_some() {
             return self;
         }
-        if let Err(error) = validate_task_name(T::NAME) {
+        if let Err(error) = validate_task_name(task.name()) {
             self.error = Some(error);
             return self;
         }
-        if self.registry.contains_key(T::NAME) {
-            self.error =
-                Some(Error::InvalidOptions(format!("task {:?} is already registered", T::NAME)));
+        if self.registry.contains_key(task.name()) {
+            self.error = Some(Error::InvalidOptions(format!(
+                "task {:?} is already registered",
+                task.name()
+            )));
             return self;
         }
 
@@ -483,12 +487,12 @@ impl WorkerBuilder {
         let erased: ErasedTaskExecutor = Arc::new(move |raw, context| {
             let executor = Arc::clone(&executor);
             Box::pin(async move {
-                let input = serde_json::from_value::<T::Input>(raw)?;
+                let input = serde_json::from_value::<Input>(raw)?;
                 let output = executor.execute(input, context).await?;
                 Ok(serde_json::to_value(output)?)
             })
         });
-        self.registry.insert(T::NAME.to_owned(), RegisteredTask { executor: erased });
+        self.registry.insert(task.name().to_owned(), RegisteredTask { executor: erased });
         self
     }
 

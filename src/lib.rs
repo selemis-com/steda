@@ -1,8 +1,8 @@
 //! PostgreSQL-backed durable task execution for Rust.
 //!
 //! Steda keeps the execution model deliberately small: application code defines typed
-//! [`Task`] contracts, producers persist logical tasks into named [`Queue`]s, and workers
-//! advertise the task types they can execute. `PostgreSQL` is authoritative for task state,
+//! [`Task`] values, producers persist logical tasks into named [`Queue`]s, and workers
+//! advertise the tasks they can execute. `PostgreSQL` is authoritative for task state,
 //! attempts, leases, retries, checkpoints, durable sleeps, cancellation, and results; worker
 //! processes are replaceable compute.
 //!
@@ -10,9 +10,8 @@
 //!
 //! # Quick start
 //!
-//! A task is a marker type that couples a stable persisted name to serializable input and output
-//! types. Producer and worker code share that compile-time contract without sharing a runtime
-//! registry.
+//! A task is a small constant value that couples a stable persisted name to serializable input
+//! and output types. Producer and worker code share that definition without a runtime registry.
 //!
 //! ```no_run
 //! use serde::{Deserialize, Serialize};
@@ -29,13 +28,7 @@
 //!     sum: i64,
 //! }
 //!
-//! struct Add;
-//!
-//! impl Task for Add {
-//!     const NAME: &'static str = "add";
-//!     type Input = AddInput;
-//!     type Output = AddOutput;
-//! }
+//! const ADD: Task<AddInput, AddOutput> = Task::new("add");
 //!
 //! # async fn example() -> Result<()> {
 //! let steda = Steda::connect("postgres://localhost/app").await?;
@@ -46,12 +39,12 @@
 //!
 //! let worker = queue
 //!     .worker()
-//!     .task::<Add>(async |input: AddInput, _ctx: TaskContext| {
+//!     .task(ADD, async |input: AddInput, _ctx: TaskContext| {
 //!         Ok(AddOutput { sum: input.left + input.right })
 //!     })
 //!     .build()?;
 //!
-//! let task = queue.spawn::<Add>(AddInput { left: 20, right: 22 }).await?;
+//! let task = queue.spawn(ADD, AddInput { left: 20, right: 22 }).await?;
 //!
 //! // Long-lived applications normally run the worker in their process supervisor.
 //! let worker_task = tokio::spawn(async move { worker.run().await });
@@ -75,7 +68,7 @@
 //! The default attempt budget is five. The default [`RetryStrategy`] is exponential backoff
 //! starting at 30 seconds, doubling on each retry, with a one-hour cap. Use
 //! [`Spawn::max_attempts`] and [`Spawn::retry_strategy`] when a task needs a different policy.
-//! A manual [`Queue::retry_task`] adds another attempt to a terminally failed task without
+//! Calling [`TaskHandle::retry`] adds another attempt to a terminally failed task without
 //! changing the original spawn configuration used for idempotency comparison.
 //!
 //! ## Claims, leases, and stale-worker fencing
@@ -119,10 +112,10 @@
 //! `PostgreSQL`. When the logical task is replayed, Steda returns the committed value and skips the
 //! body.
 //!
-//! [`Step`] identities are therefore part of a workflow's durable contract. Define them with
+//! [`Step`] values are therefore part of a workflow's durable shape. Define them as constants with
 //! stable semantic names such as `reserve-inventory` rather than names derived from attempt
-//! numbers or process-local state. The `Step` marker type also fixes the checkpointed Rust value
-//! type, so workflow code passes a typed identity rather than a raw name.
+//! numbers or process-local state. `Step<Output>` keeps the checkpointed Rust value type attached
+//! to that name, so workflow code does not pass raw strings.
 //!
 //! A checkpoint does **not** make an external side effect exactly once. A process can fail after
 //! an external API accepts a request but before Steda commits the checkpoint. On retry, the step
@@ -142,9 +135,9 @@
 //!
 //! ## Waiting for another task
 //!
-//! [`TaskContext::await_task_result`] waits for a terminal result in another queue and checkpoints
-//! that result under an internal identity derived from the target queue and task ID. A completed
-//! wait can therefore replay if the parent later retries.
+//! [`TaskContext::await_task`] waits for a typed [`TaskRef`] in another queue and checkpoints
+//! its decoded output under an internal identity derived from the target queue and task ID. A
+//! completed wait can therefore replay if the parent later retries.
 //!
 //! Same-queue waits are rejected because a finite worker pool could otherwise be filled entirely
 //! by parents waiting for children that need those same slots. Cross-queue waits retain the
@@ -171,7 +164,7 @@
 //! deadlines against its authoritative clock. Once a task has started, `max_delay` no longer
 //! applies.
 //!
-//! Explicit [`Queue::cancel_task`] and deadline cancellation are durable. A stale attempt cannot
+//! Explicit [`TaskHandle::cancel`] and deadline cancellation are durable. A stale attempt cannot
 //! later complete a cancelled task.
 //!
 //! # Operating Steda
@@ -284,15 +277,15 @@ pub mod middleware {
     };
 }
 
-pub use context::{AwaitTaskResultOptions, TaskContext};
+pub use context::{TaskContext, TaskWait};
 pub use db::migrate;
 pub use error::{Error, Result};
 pub use queue::Queue;
 pub use steda::{Steda, StedaBuilder};
-pub use task::{Spawn, Task, TaskHandle};
+pub use task::{Spawn, SpawnedTask, Task, TaskHandle, TaskRef, TaskSnapshot};
 pub use types::{
     CancellationPolicy, Json, JsonObject, QueueCleanup, QueuePolicy, QueuePolicyOptions,
-    RetryStrategy, RunId, TaskId, TaskResultSnapshot, TaskResultState, Timestamp,
+    RetryStrategy, RunId, TaskId, TaskResultState, Timestamp,
 };
 pub use worker::{TaskExecutor, TaskHandler, Worker, WorkerBuilder};
 pub use workflow::{Sleep, Step};

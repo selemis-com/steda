@@ -34,14 +34,8 @@ struct DeliveryReceipt {
     delivered_on_attempt: u32,
 }
 
-/// Durable task contract for remote document delivery.
-struct DeliverDocument;
-
-impl Task for DeliverDocument {
-    const NAME: &'static str = "deliver-document";
-    type Input = DeliverDocumentInput;
-    type Output = DeliveryReceipt;
-}
+/// Task definition for remote document delivery.
+const DELIVER_DOCUMENT: Task<DeliverDocumentInput, DeliveryReceipt> = Task::new("deliver-document");
 
 /// Run the retry-policy example.
 #[tokio::main(flavor = "current_thread")]
@@ -52,7 +46,7 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<DeliverDocument>(async |input: DeliverDocumentInput, ctx: TaskContext| {
+        .task(DELIVER_DOCUMENT, async |input: DeliverDocumentInput, ctx: TaskContext| {
             println!("attempt {} for {}", ctx.attempt(), input.document_id);
 
             if ctx.attempt() < 3 {
@@ -70,10 +64,13 @@ async fn main() -> Result<()> {
 
     // The attempt budget includes the first execution, so this permits exactly three tries.
     let task = queue
-        .spawn::<DeliverDocument>(DeliverDocumentInput {
-            document_id: common::unique_key("statement")?,
-            destination: "archive@example.invalid".to_owned(),
-        })
+        .spawn(
+            DELIVER_DOCUMENT,
+            DeliverDocumentInput {
+                document_id: common::unique_key("statement")?,
+                destination: "archive@example.invalid".to_owned(),
+            },
+        )
         .max_attempts(3)
         .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;

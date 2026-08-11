@@ -24,50 +24,15 @@ mod tests {
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct ClaimedOnly;
+    const CLAIMED_ONLY: Task<Value, Value> = Task::new("claimed-only");
 
-    impl Task for ClaimedOnly {
-        const NAME: &'static str = "claimed-only";
-        type Input = Value;
-        type Output = Value;
-    }
+    const RETRY_PROBE: Task<Value, Value> = Task::new("retry-probe");
 
-    #[derive(Clone, Copy, Debug)]
-    struct RetryProbe;
+    const DEFAULT_BACKOFF: Task<Value, Value> = Task::new("default-backoff");
 
-    impl Task for RetryProbe {
-        const NAME: &'static str = "retry-probe";
-        type Input = Value;
-        type Output = Value;
-    }
+    const FLAKY: Task<Value, Value> = Task::new("flaky");
 
-    #[derive(Clone, Copy, Debug)]
-    struct DefaultBackoff;
-
-    impl Task for DefaultBackoff {
-        const NAME: &'static str = "default-backoff";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Flaky;
-
-    impl Task for Flaky {
-        const NAME: &'static str = "flaky";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct NeverRetry;
-
-    impl Task for NeverRetry {
-        const NAME: &'static str = "never-retry";
-        type Input = Value;
-        type Output = Value;
-    }
+    const NEVER_RETRY: Task<Value, Value> = Task::new("never-retry");
 
     async fn set_fake_now(pool: &PgPool, now: OffsetDateTime) -> Result<()> {
         let mut connections = Vec::new();
@@ -161,7 +126,7 @@ mod tests {
         app.create().await.expect("queue should be created");
 
         let task = app
-            .spawn::<RetryProbe>(json!({}))
+            .spawn(RETRY_PROBE, json!({}))
             .max_attempts(2_147_483_647)
             .retry_strategy(RetryStrategy::exponential(
                 Duration::from_secs(30),
@@ -185,7 +150,7 @@ mod tests {
         let retry_calls = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<Flaky>({
+            .task(FLAKY, {
                 let retry_calls = retry_calls.clone();
                 move |_params: Value, _ctx| {
                     let retry_calls = retry_calls.clone();
@@ -199,7 +164,7 @@ mod tests {
             })
             .build()?;
         let flaky = app
-            .spawn::<Flaky>(json!({}))
+            .spawn(FLAKY, json!({}))
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -222,7 +187,7 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<DefaultBackoff>(async |_params: Value, _ctx| {
+            .task(DEFAULT_BACKOFF, async |_params: Value, _ctx| {
                 Err::<Value, Error>(Error::InvalidOptions("retry me".to_owned()))
             })
             .build()?;
@@ -231,13 +196,14 @@ mod tests {
             .map_err(|err| Error::InvalidOptions(err.to_string()))?;
         set_fake_now(&pool, base).await?;
 
-        let spawned = app.spawn::<DefaultBackoff>(json!({})).max_attempts(2).await?;
+        let spawned = app.spawn(DEFAULT_BACKOFF, json!({})).max_attempts(2).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         let query = format!(
             "SELECT state, available_at FROM steda.runs_{queue} WHERE task_id = $1 AND attempt = 2"
         );
-        let row = sqlx::query(AssertSqlSafe(query)).bind(spawned.id()).fetch_one(&pool).await?;
+        let row =
+            sqlx::query(AssertSqlSafe(query)).bind(spawned.task_id()).fetch_one(&pool).await?;
         assert_eq!(row.get::<String, _>("state"), "sleeping");
         assert_eq!(
             row.get::<OffsetDateTime, _>("available_at"),
@@ -257,7 +223,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<NeverRetry>({
+            .task(NEVER_RETRY, {
                 let calls = calls.clone();
                 move |_params: Value, _ctx| {
                     let calls = calls.clone();
@@ -270,7 +236,7 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<NeverRetry>(json!({}))
+            .spawn(NEVER_RETRY, json!({}))
             .max_attempts(5)
             .retry_strategy(RetryStrategy::none())
             .await?;
@@ -278,10 +244,7 @@ mod tests {
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        assert!(matches!(
-            app.fetch_task_result(spawned.id()).await?,
-            Some(steda::TaskResultSnapshot::Failed { .. })
-        ));
+        assert!(matches!(spawned.snapshot().await?, Some(steda::TaskSnapshot::Failed { .. })));
 
         app.delete().await?;
         Ok(())
@@ -296,7 +259,7 @@ mod tests {
         app.create().await?;
 
         let spawned = app
-            .spawn::<ClaimedOnly>(json!({}))
+            .spawn(CLAIMED_ONLY, json!({}))
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -306,7 +269,7 @@ mod tests {
                 .bind("failed-attempt-worker")
                 .bind(30_i32)
                 .bind(1_i32)
-                .bind(vec![ClaimedOnly::NAME.to_owned()])
+                .bind(vec![CLAIMED_ONLY.name().to_owned()])
                 .fetch_one(&pool)
                 .await?;
 
@@ -316,7 +279,7 @@ mod tests {
             .bind(json!({"name": "ExpectedFailure"}))
             .execute(&pool)
             .await?;
-        app.cancel_task(spawned.id()).await?;
+        spawned.cancel().await?;
 
         let error = sqlx::query("SELECT steda.fail_run($1, $2, $3, FALSE)")
             .bind(&queue)

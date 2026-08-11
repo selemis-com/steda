@@ -27,68 +27,19 @@ mod tests {
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct CancelWhileSaturated;
+    const CANCEL_WHILE_SATURATED: Task<Value, Value> = Task::new("cancel-while-saturated");
 
-    impl Task for CancelWhileSaturated {
-        const NAME: &'static str = "cancel-while-saturated";
-        type Input = Value;
-        type Output = Value;
-    }
+    const CONCURRENT_TASK: Task<Value, Value> = Task::new("concurrent-task");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ConcurrentTask;
+    const DRAINING_TASK: Task<Value, Value> = Task::new("draining-task");
 
-    impl Task for ConcurrentTask {
-        const NAME: &'static str = "concurrent-task";
-        type Input = Value;
-        type Output = Value;
-    }
+    const EXPIRE_ONCE: Task<Value, Value> = Task::new("expire-once");
 
-    #[derive(Clone, Copy, Debug)]
-    struct DrainingTask;
+    const HANG: Task<Value, Value> = Task::new("hang");
 
-    impl Task for DrainingTask {
-        const NAME: &'static str = "draining-task";
-        type Input = Value;
-        type Output = Value;
-    }
+    const QUICK: Task<Value, Value> = Task::new("quick");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ExpireOnce;
-
-    impl Task for ExpireOnce {
-        const NAME: &'static str = "expire-once";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Hang;
-
-    impl Task for Hang {
-        const NAME: &'static str = "hang";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Quick;
-
-    impl Task for Quick {
-        const NAME: &'static str = "quick";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct RenewLease;
-
-    impl Task for RenewLease {
-        const NAME: &'static str = "renew-lease";
-        type Input = Value;
-        type Output = Value;
-    }
+    const RENEW_LEASE: Task<Value, Value> = Task::new("renew-lease");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn worker_claims_only_available_concurrency(pool: PgPool) -> Result<()> {
@@ -102,7 +53,7 @@ mod tests {
         let worker = app
             .worker()
             .concurrency(2)
-            .task::<ConcurrentTask>({
+            .task(CONCURRENT_TASK, {
                 let active = active.clone();
                 let reached_capacity = reached_capacity.clone();
                 let release = release.clone();
@@ -128,8 +79,8 @@ mod tests {
             })
             .build()?;
 
-        let first = app.spawn::<ConcurrentTask>(json!({})).await?;
-        let second = app.spawn::<ConcurrentTask>(json!({})).await?;
+        let first = app.spawn(CONCURRENT_TASK, json!({})).await?;
+        let second = app.spawn(CONCURRENT_TASK, json!({})).await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let worker = tokio::spawn(async move {
             worker
@@ -166,7 +117,7 @@ mod tests {
         let error = queue
             .worker()
             .concurrency(0)
-            .task::<Quick>(async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
             .build()
             .expect_err("zero worker concurrency must be rejected");
         assert!(matches!(error, Error::InvalidOptions(_)));
@@ -186,7 +137,7 @@ mod tests {
         let worker = app
             .worker()
             .concurrency(2)
-            .task::<DrainingTask>({
+            .task(DRAINING_TASK, {
                 let started = started.clone();
                 let release = release.clone();
                 move |_params: Value, _ctx| {
@@ -207,7 +158,7 @@ mod tests {
             })
             .build()?;
 
-        let spawned = app.spawn::<DrainingTask>(json!({})).await?;
+        let spawned = app.spawn(DRAINING_TASK, json!({})).await?;
         let worker = tokio::spawn(async move { worker.run().await });
 
         timeout(Duration::from_secs(5), started.notified())
@@ -257,13 +208,13 @@ mod tests {
         let worker = app
             .worker()
             .lease_duration(Duration::from_secs(2))
-            .task::<RenewLease>(async |_params: Value, _ctx| {
+            .task(RENEW_LEASE, async |_params: Value, _ctx| {
                 sleep(Duration::from_millis(2_500)).await;
                 Ok(json!({"renewed": true}))
             })
             .build()?;
         let task = app
-            .spawn::<RenewLease>(json!({}))
+            .spawn(RENEW_LEASE, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .await?;
@@ -287,7 +238,7 @@ mod tests {
         let attempts = Arc::new(AtomicUsize::new(0));
         let runtime = app
             .worker()
-            .task::<ExpireOnce>({
+            .task(EXPIRE_ONCE, {
                 let started = started.clone();
                 let attempts = attempts.clone();
                 move |_params: Value, _ctx| {
@@ -306,7 +257,7 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<ExpireOnce>(json!({}))
+            .spawn(EXPIRE_ONCE, json!({}))
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -325,7 +276,7 @@ mod tests {
         let task_table = format!("tasks_{queue}");
         let run_id_query = format!("SELECT last_attempt_run FROM steda.{task_table} WHERE id = $1");
         let run_id: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(run_id_query))
-            .bind(spawned.id())
+            .bind(spawned.task_id())
             .fetch_one(&pool)
             .await?;
         let run_table = format!("runs_{queue}");
@@ -359,7 +310,7 @@ mod tests {
         let hanging_started = Arc::new(Notify::new());
         let runtime = app
             .worker()
-            .task::<Hang>({
+            .task(HANG, {
                 let hanging_started = hanging_started.clone();
                 move |_params: Value, _ctx| {
                     let hanging_started = hanging_started.clone();
@@ -369,10 +320,10 @@ mod tests {
                     }
                 }
             })
-            .task::<Quick>(async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
             .build()?;
 
-        let hanging = app.spawn::<Hang>(json!({})).await?;
+        let hanging = app.spawn(HANG, json!({})).await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let worker = tokio::spawn(async move {
             runtime
@@ -386,9 +337,9 @@ mod tests {
             Error::Timeout("timed out waiting for hanging task to start".to_owned())
         })?;
 
-        app.cancel_task(hanging.id()).await?;
+        hanging.cancel().await?;
 
-        let quick = app.spawn::<Quick>(json!({})).await?;
+        let quick = app.spawn(QUICK, json!({})).await?;
         let result = quick.result_with_timeout(Duration::from_secs(5)).await?;
         assert_eq!(result, json!({"ok": true}));
 
@@ -414,7 +365,7 @@ mod tests {
         let started = Arc::new(Notify::new());
         let runtime = app
             .worker()
-            .task::<CancelWhileSaturated>({
+            .task(CANCEL_WHILE_SATURATED, {
                 let started = started.clone();
                 move |_params: Value, _ctx| {
                     let started = started.clone();
@@ -427,7 +378,7 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<CancelWhileSaturated>(json!({}))
+            .spawn(CANCEL_WHILE_SATURATED, json!({}))
             .cancellation(CancellationPolicy::new().max_duration(Duration::from_secs(1)))
             .await?;
 

@@ -41,30 +41,14 @@ struct Shipment {
     payment_id: String,
 }
 
-/// Durable task contract for the shipping workflow.
-struct ShipOrder;
+/// Task definition for the shipping workflow.
+const SHIP_ORDER: Task<ShipOrderInput, Shipment> = Task::new("ship-order");
 
-impl Task for ShipOrder {
-    const NAME: &'static str = "ship-order";
-    type Input = ShipOrderInput;
-    type Output = Shipment;
-}
+/// Inventory reservation checkpoint.
+const RESERVE_INVENTORY: Step<String> = Step::new("reserve-inventory");
 
-/// Durable identity for the inventory reservation checkpoint.
-struct ReserveInventory;
-
-impl Step for ReserveInventory {
-    const NAME: &'static str = "reserve-inventory";
-    type Output = String;
-}
-
-/// Durable identity for the payment charge checkpoint.
-struct ChargePayment;
-
-impl Step for ChargePayment {
-    const NAME: &'static str = "charge-payment";
-    type Output = String;
-}
+/// Payment charge checkpoint.
+const CHARGE_PAYMENT: Step<String> = Step::new("charge-payment");
 
 /// Executes one shipment attempt using cloned durable state handles.
 async fn ship_order(
@@ -73,16 +57,16 @@ async fn ship_order(
     reservation_calls: Arc<AtomicUsize>,
     charge_calls: Arc<AtomicUsize>,
 ) -> Result<Shipment> {
-    // A typed stable step identity owns this checkpoint across every later attempt.
+    // The named step stores this value once and replays it on later attempts.
     let reservation_id = ctx
-        .step(ReserveInventory, async || {
+        .step(RESERVE_INVENTORY, async || {
             reservation_calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("reservation:{}", input.order_id))
         })
         .await?;
 
     let payment_id = ctx
-        .step(ChargePayment, async || {
+        .step(CHARGE_PAYMENT, async || {
             charge_calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("charge:{}:{}", input.order_id, input.amount_cents))
         })
@@ -110,17 +94,17 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<ShipOrder>(move |input, ctx| {
+        .task(SHIP_ORDER, move |input, ctx| {
             ship_order(input, ctx, Arc::clone(&reservation_calls), Arc::clone(&charge_calls))
         })
         .build()?;
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn::<ShipOrder>(ShipOrderInput {
-            order_id: common::unique_key("order")?,
-            amount_cents: 14_950,
-        })
+        .spawn(
+            SHIP_ORDER,
+            ShipOrderInput { order_id: common::unique_key("order")?, amount_cents: 14_950 },
+        )
         .max_attempts(2)
         .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;

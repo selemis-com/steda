@@ -40,9 +40,9 @@ pub(crate) async fn claim_tasks(
         r#"
         SELECT
             run_id,
-            id,
+            id AS task_id,
             attempt,
-            name,
+            name AS task_name,
             params,
             headers
         FROM steda.claim_tasks($1, $2, $3, $4, $5)
@@ -195,9 +195,9 @@ fn claimed_task_from_row(row: &PgRow) -> Result<ClaimedTask> {
 
     Ok(ClaimedTask {
         run_id: row.get("run_id"),
-        id: row.get("id"),
+        task_id: row.get("task_id"),
         attempt,
-        name: row.get("name"),
+        task_name: row.get("task_name"),
         params: row.get("params"),
         headers,
     })

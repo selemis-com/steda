@@ -20,80 +20,25 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, RetryStrategy, Steda, Step, Task, TaskContext, TaskResultSnapshot};
+    use steda::{Error, Result, RetryStrategy, Steda, Step, Task, TaskContext, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct DoubleCheckpoint;
+    const DOUBLE_CHECKPOINT: Step<i32> = Step::new("double");
 
-    impl Step for DoubleCheckpoint {
-        const NAME: &'static str = "double";
-        type Output = i32;
-    }
+    const FORGED_CANCELLED: Task<Value, Value> = Task::new("forged-cancelled");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ForgedCancelled;
+    const FORGED_FAILED: Task<Value, Value> = Task::new("forged-failed");
 
-    impl Task for ForgedCancelled {
-        const NAME: &'static str = "forged-cancelled";
-        type Input = Value;
-        type Output = Value;
-    }
+    const FORGED_LEASE_LOST: Task<Value, Value> = Task::new("forged-lease-lost");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ForgedFailed;
+    const FORGED_SUSPENDED: Task<Value, Value> = Task::new("forged-suspended");
 
-    impl Task for ForgedFailed {
-        const NAME: &'static str = "forged-failed";
-        type Input = Value;
-        type Output = Value;
-    }
+    const MIXED_FAIL: Task<Value, Value> = Task::new("mixed-fail");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ForgedLeaseLost;
+    const MIXED_OK_A: Task<Value, Value> = Task::new("mixed-ok-a");
 
-    impl Task for ForgedLeaseLost {
-        const NAME: &'static str = "forged-lease-lost";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct ForgedSuspended;
-
-    impl Task for ForgedSuspended {
-        const NAME: &'static str = "forged-suspended";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct MixedFail;
-
-    impl Task for MixedFail {
-        const NAME: &'static str = "mixed-fail";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct MixedOkA;
-
-    impl Task for MixedOkA {
-        const NAME: &'static str = "mixed-ok-a";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct MixedOkB;
-
-    impl Task for MixedOkB {
-        const NAME: &'static str = "mixed-ok-b";
-        type Input = Value;
-        type Output = Value;
-    }
+    const MIXED_OK_B: Task<Value, Value> = Task::new("mixed-ok-b");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn processes_task(pool: PgPool) -> Result<()> {
@@ -107,13 +52,7 @@ mod tests {
             value: i32,
         }
 
-        struct Double;
-
-        impl Task for Double {
-            const NAME: &'static str = "double";
-            type Input = Params;
-            type Output = Output;
-        }
+        const DOUBLE: Task<Params, Output> = Task::new("double");
 
         let queue = unique_queue("task_exec");
         let app = Steda::from_pool(pool).queue(queue.clone())?;
@@ -122,13 +61,13 @@ mod tests {
         let step_calls = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<Double>({
+            .task(DOUBLE, {
                 let step_calls = step_calls.clone();
                 move |params: Params, ctx: TaskContext| {
                     let step_calls = step_calls.clone();
                     async move {
                         let value = ctx
-                            .step(DoubleCheckpoint, async move || {
+                            .step(DOUBLE_CHECKPOINT, async move || {
                                 step_calls.fetch_add(1, Ordering::SeqCst);
                                 Ok(params.value * 2)
                             })
@@ -139,7 +78,7 @@ mod tests {
             })
             .build()?;
 
-        let spawned = app.spawn::<Double>(Params { value: 21 }).await?;
+        let spawned = app.spawn(DOUBLE, Params { value: 21 }).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         let output = spawned.result_with_timeout(Duration::from_secs(5)).await?;
@@ -159,41 +98,41 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<ForgedSuspended>(async |_params: Value, _ctx| Err::<Value, _>(Error::Suspended))
-            .task::<ForgedCancelled>(async |_params: Value, _ctx| Err::<Value, _>(Error::Cancelled))
-            .task::<ForgedFailed>(async |_params: Value, _ctx| Err::<Value, _>(Error::FailedRun))
-            .task::<ForgedLeaseLost>(async |_params: Value, _ctx| Err::<Value, _>(Error::LeaseLost))
+            .task(FORGED_SUSPENDED, async |_params: Value, _ctx| Err::<Value, _>(Error::Suspended))
+            .task(FORGED_CANCELLED, async |_params: Value, _ctx| Err::<Value, _>(Error::Cancelled))
+            .task(FORGED_FAILED, async |_params: Value, _ctx| Err::<Value, _>(Error::FailedRun))
+            .task(FORGED_LEASE_LOST, async |_params: Value, _ctx| Err::<Value, _>(Error::LeaseLost))
             .build()?;
 
-        let spawned_ids = [
-            app.spawn::<ForgedSuspended>(json!({}))
-                .max_attempts(1)
-                .retry_strategy(RetryStrategy::none())
-                .await?
-                .id(),
-            app.spawn::<ForgedCancelled>(json!({}))
-                .max_attempts(1)
-                .retry_strategy(RetryStrategy::none())
-                .await?
-                .id(),
-            app.spawn::<ForgedFailed>(json!({}))
-                .max_attempts(1)
-                .retry_strategy(RetryStrategy::none())
-                .await?
-                .id(),
-            app.spawn::<ForgedLeaseLost>(json!({}))
-                .max_attempts(1)
-                .retry_strategy(RetryStrategy::none())
-                .await?
-                .id(),
-        ];
+        let suspended = app
+            .spawn(FORGED_SUSPENDED, json!({}))
+            .max_attempts(1)
+            .retry_strategy(RetryStrategy::none())
+            .await?;
+        let cancelled = app
+            .spawn(FORGED_CANCELLED, json!({}))
+            .max_attempts(1)
+            .retry_strategy(RetryStrategy::none())
+            .await?;
+        let failed = app
+            .spawn(FORGED_FAILED, json!({}))
+            .max_attempts(1)
+            .retry_strategy(RetryStrategy::none())
+            .await?;
+        let lease_lost = app
+            .spawn(FORGED_LEASE_LOST, json!({}))
+            .max_attempts(1)
+            .retry_strategy(RetryStrategy::none())
+            .await?;
 
-        for spawned_id in spawned_ids {
-            run_worker_for_claims(&worker, app.metrics(), 1).await?;
-            assert!(matches!(
-                app.fetch_task_result(spawned_id).await?,
-                Some(TaskResultSnapshot::Failed { .. })
-            ));
+        run_worker_for_claims(&worker, app.metrics(), 4).await?;
+        for snapshot in [
+            suspended.snapshot().await?,
+            cancelled.snapshot().await?,
+            failed.snapshot().await?,
+            lease_lost.snapshot().await?,
+        ] {
+            assert!(matches!(snapshot, Some(TaskSnapshot::Failed { .. })));
         }
 
         assert_eq!(app.metrics().lease_lost_executions(), 0);
@@ -209,33 +148,24 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<MixedOkA>(async |_params: Value, _ctx| Ok(json!({"ok": "a"})))
-            .task::<MixedOkB>(async |_params: Value, _ctx| Ok(json!({"ok": "b"})))
-            .task::<MixedFail>(async |_params: Value, _ctx| {
+            .task(MIXED_OK_A, async |_params: Value, _ctx| Ok(json!({"ok": "a"})))
+            .task(MIXED_OK_B, async |_params: Value, _ctx| Ok(json!({"ok": "b"})))
+            .task(MIXED_FAIL, async |_params: Value, _ctx| {
                 Err::<Value, Error>(Error::InvalidOptions("mixed batch failure".to_owned()))
             })
             .build()?;
 
-        let ok_a = app.spawn::<MixedOkA>(json!({})).await?;
-        let fail = app.spawn::<MixedFail>(json!({})).max_attempts(1).await?;
-        let ok_b = app.spawn::<MixedOkB>(json!({})).await?;
+        let ok_a = app.spawn(MIXED_OK_A, json!({})).await?;
+        let fail = app.spawn(MIXED_FAIL, json!({})).max_attempts(1).await?;
+        let ok_b = app.spawn(MIXED_OK_B, json!({})).await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
-        assert!(matches!(
-            app.fetch_task_result(ok_a.id()).await?,
-            Some(TaskResultSnapshot::Completed { .. })
-        ));
-        assert!(matches!(
-            app.fetch_task_result(fail.id()).await?,
-            Some(TaskResultSnapshot::Failed { .. })
-        ));
-        assert!(matches!(
-            app.fetch_task_result(ok_b.id()).await?,
-            Some(TaskResultSnapshot::Completed { .. })
-        ));
+        assert!(matches!(ok_a.snapshot().await?, Some(TaskSnapshot::Completed { .. })));
+        assert!(matches!(fail.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
+        assert!(matches!(ok_b.snapshot().await?, Some(TaskSnapshot::Completed { .. })));
 
         app.delete().await?;
 

@@ -769,17 +769,17 @@ mod tests {
     ) -> StatefulResult<()> {
         let task_query = format!("SELECT id FROM steda.tasks_{queue} ORDER BY id");
         for row in sqlx::query(AssertSqlSafe(task_query)).fetch_all(&mut *connection).await? {
-            let id: Uuid = row.get("id");
-            if !bindings.tasks.contains(&id) {
-                bindings.tasks.push(id);
+            let task_id: Uuid = row.get("id");
+            if !bindings.tasks.contains(&task_id) {
+                bindings.tasks.push(task_id);
             }
         }
 
         let run_query = format!("SELECT id FROM steda.runs_{queue} ORDER BY id");
         for row in sqlx::query(AssertSqlSafe(run_query)).fetch_all(&mut *connection).await? {
-            let id: Uuid = row.get("id");
-            if !bindings.runs.contains(&id) {
-                bindings.runs.push(id);
+            let run_id: Uuid = row.get("id");
+            if !bindings.runs.contains(&run_id) {
+                bindings.runs.push(run_id);
             }
         }
         Ok(())

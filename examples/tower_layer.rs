@@ -43,14 +43,8 @@ struct RenderPreviewOutput {
     preview_path: String,
 }
 
-/// Durable task contract used by the Tower example.
-struct RenderPreview;
-
-impl Task for RenderPreview {
-    const NAME: &'static str = "render-preview";
-    type Input = RenderPreviewInput;
-    type Output = RenderPreviewOutput;
-}
+/// Task definition used by the Tower example.
+const RENDER_PREVIEW: Task<RenderPreviewInput, RenderPreviewOutput> = Task::new("render-preview");
 
 /// Tower layer that times each registered executor invocation.
 #[derive(Clone, Debug)]
@@ -128,7 +122,7 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<RenderPreview>(async |input: RenderPreviewInput, _ctx: TaskContext| {
+        .task(RENDER_PREVIEW, async |input: RenderPreviewInput, _ctx: TaskContext| {
             // This delay is inside the handler, so the layer's timer observes it. Claiming and the
             // final durable completion transition happen outside this middleware boundary.
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -138,7 +132,7 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn::<RenderPreview>(RenderPreviewInput { document_id: common::unique_key("document")? })
+        .spawn(RENDER_PREVIEW, RenderPreviewInput { document_id: common::unique_key("document")? })
         .await?;
     let output = task.result_with_timeout(Duration::from_secs(10)).await?;
 

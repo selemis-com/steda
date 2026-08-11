@@ -25,24 +25,10 @@ mod tests {
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
     /// Task executed through a reusable executor object rather than an async function.
-    #[derive(Clone, Copy, Debug)]
-    struct Provisioned;
-
-    impl Task for Provisioned {
-        const NAME: &'static str = "provisioned";
-        type Input = i64;
-        type Output = i64;
-    }
+    const PROVISIONED: Task<i64, i64> = Task::new("provisioned");
 
     /// Task whose executor remains active until Steda supervision cancels it.
-    #[derive(Clone, Copy, Debug)]
-    struct Cancellable;
-
-    impl Task for Cancellable {
-        const NAME: &'static str = "cancellable-executor";
-        type Input = ();
-        type Output = ();
-    }
+    const CANCELLABLE: Task<(), ()> = Task::new("cancellable-executor");
 
     /// Records that dropping the execution future tears down provisioned work.
     #[derive(Debug)]
@@ -61,7 +47,7 @@ mod tests {
         dropped: Arc<AtomicBool>,
     }
 
-    impl TaskExecutor<Cancellable> for CancellableExecutor {
+    impl TaskExecutor<(), ()> for CancellableExecutor {
         fn execute(
             &self,
             (): (),
@@ -85,7 +71,7 @@ mod tests {
         attempts: Arc<Mutex<Vec<(u32, RunId)>>>,
     }
 
-    impl TaskExecutor<Provisioned> for ProvisionedExecutor {
+    impl TaskExecutor<i64, i64> for ProvisionedExecutor {
         fn execute(
             &self,
             input: i64,
@@ -117,10 +103,10 @@ mod tests {
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let worker = queue
             .worker()
-            .task_executor::<Provisioned>(ProvisionedExecutor { attempts: Arc::clone(&attempts) })
+            .task_executor(PROVISIONED, ProvisionedExecutor { attempts: Arc::clone(&attempts) })
             .build()?;
         let task = queue
-            .spawn::<Provisioned>(21)
+            .spawn(PROVISIONED, 21)
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -152,17 +138,20 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let worker = queue
             .worker()
-            .task_executor::<Cancellable>(CancellableExecutor {
-                started: Arc::clone(&started),
-                dropped: Arc::clone(&dropped),
-            })
+            .task_executor(
+                CANCELLABLE,
+                CancellableExecutor {
+                    started: Arc::clone(&started),
+                    dropped: Arc::clone(&dropped),
+                },
+            )
             .build()?;
-        let task = queue.spawn::<Cancellable>(()).await?;
+        let task = queue.spawn(CANCELLABLE, ()).await?;
 
         let run_worker = run_worker_for_claims(&worker, queue.metrics(), 1);
         let cancel = async {
             started.notified().await;
-            queue.cancel_task(task.id()).await
+            task.cancel().await
         };
         let (worker_result, cancel_result) = tokio::join!(run_worker, cancel);
         cancel_result?;

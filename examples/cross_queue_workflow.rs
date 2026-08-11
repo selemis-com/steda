@@ -12,10 +12,7 @@ use std::time::Duration;
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{
-    AwaitTaskResultOptions, Error, Queue, Result, Step, Task, TaskContext, TaskId,
-    TaskResultSnapshot,
-};
+use steda::{Queue, Result, Step, Task, TaskContext, TaskRef};
 
 /// Input for the child email task.
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,14 +30,8 @@ struct EmailReceiptOutput {
     message_id: String,
 }
 
-/// Durable child task contract.
-struct EmailReceipt;
-
-impl Task for EmailReceipt {
-    const NAME: &'static str = "email-receipt";
-    type Input = EmailReceiptInput;
-    type Output = EmailReceiptOutput;
-}
+/// Child task definition.
+const EMAIL_RECEIPT: Task<EmailReceiptInput, EmailReceiptOutput> = Task::new("email-receipt");
 
 /// Input for the parent order task.
 #[derive(Debug, Deserialize, Serialize)]
@@ -60,22 +51,12 @@ struct CompleteOrderOutput {
     receipt_message_id: String,
 }
 
-/// Durable parent task contract.
-struct CompleteOrder;
+/// Parent task definition.
+const COMPLETE_ORDER: Task<CompleteOrderInput, CompleteOrderOutput> = Task::new("complete-order");
 
-impl Task for CompleteOrder {
-    const NAME: &'static str = "complete-order";
-    type Input = CompleteOrderInput;
-    type Output = CompleteOrderOutput;
-}
-
-/// Durable identity for checkpointing child task creation.
-struct SpawnReceipt;
-
-impl Step for SpawnReceipt {
-    const NAME: &'static str = "spawn-receipt";
-    type Output = TaskId;
-}
+/// Checkpoint used for child task creation.
+const SPAWN_RECEIPT: Step<TaskRef<EmailReceiptInput, EmailReceiptOutput>> =
+    Step::new("spawn-receipt");
 
 /// Completes one order workflow attempt and waits for the receipt task.
 async fn complete_order(
@@ -88,39 +69,21 @@ async fn complete_order(
     let receipt_queue = child_queue.clone();
     let child_order_id = order_id.clone();
     // Checkpoint child creation so a parent retry cannot create a second logical child.
-    let child_id = ctx
-        .step(SpawnReceipt, async move || {
+    let child = ctx
+        .step(SPAWN_RECEIPT, async move || {
             let child = receipt_queue
-                .spawn::<EmailReceipt>(EmailReceiptInput {
-                    order_id: child_order_id.clone(),
-                    address: email_address,
-                })
+                .spawn(
+                    EMAIL_RECEIPT,
+                    EmailReceiptInput { order_id: child_order_id.clone(), address: email_address },
+                )
                 .idempotency_key(format!("receipt:{child_order_id}"))
                 .await?;
-            Ok(child.id())
+            Ok(child.task_ref())
         })
         .await?;
 
-    // The completed child result is checkpointed under the child task reference.
-    let snapshot = ctx
-        .await_task_result(
-            child_id,
-            AwaitTaskResultOptions::new(child_queue.name()).timeout(Duration::from_secs(10)),
-        )
-        .await?;
-
-    let receipt: EmailReceiptOutput = match &snapshot {
-        TaskResultSnapshot::Completed { .. } => snapshot
-            .result()?
-            .ok_or_else(|| Error::Other("completed child had no result".to_owned()))?,
-        TaskResultSnapshot::Failed { failure } => {
-            return Err(Error::TaskFailed { failure: failure.clone() });
-        }
-        TaskResultSnapshot::Cancelled => return Err(Error::Cancelled),
-        _ => {
-            return Err(Error::Other("cross-queue wait returned a non-terminal result".to_owned()));
-        }
-    };
+    // The typed child output is checkpointed under the durable child task reference.
+    let receipt = ctx.await_task(&child).timeout(Duration::from_secs(10)).await?;
 
     Ok(CompleteOrderOutput { order_id: input.order_id, receipt_message_id: receipt.message_id })
 }
@@ -136,7 +99,7 @@ async fn main() -> Result<()> {
 
     let email_worker = email
         .worker()
-        .task::<EmailReceipt>(async |input: EmailReceiptInput, _ctx: TaskContext| {
+        .task(EMAIL_RECEIPT, async |input: EmailReceiptInput, _ctx: TaskContext| {
             println!("sending receipt for {} to {}", input.order_id, input.address);
             Ok(EmailReceiptOutput { message_id: format!("msg:{}", input.order_id) })
         })
@@ -146,16 +109,16 @@ async fn main() -> Result<()> {
     let child_queue = email.clone();
     let orders_worker = orders
         .worker()
-        .task::<CompleteOrder>(move |input, ctx| complete_order(input, ctx, child_queue.clone()))
+        .task(COMPLETE_ORDER, move |input, ctx| complete_order(input, ctx, child_queue.clone()))
         .build()?;
     let orders_worker = RunningWorker::start(orders_worker);
 
     let order_id = common::unique_key("order")?;
     let task = orders
-        .spawn::<CompleteOrder>(CompleteOrderInput {
-            order_id,
-            email: "buyer@example.invalid".to_owned(),
-        })
+        .spawn(
+            COMPLETE_ORDER,
+            CompleteOrderInput { order_id, email: "buyer@example.invalid".to_owned() },
+        )
         .await?;
 
     let completed = task.result_with_timeout(Duration::from_secs(15)).await?;

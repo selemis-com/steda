@@ -11,36 +11,15 @@ mod worker_support;
 mod tests {
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskResultSnapshot};
+    use steda::{Error, Result, Steda, Task, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct AlphaOnly;
+    const ALPHA_ONLY: Task<Value, Value> = Task::new("alpha-only");
 
-    impl Task for AlphaOnly {
-        const NAME: &'static str = "alpha-only";
-        type Input = Value;
-        type Output = Value;
-    }
+    const BETA_ONLY: Task<Value, Value> = Task::new("beta-only");
 
-    #[derive(Clone, Copy, Debug)]
-    struct BetaOnly;
-
-    impl Task for BetaOnly {
-        const NAME: &'static str = "beta-only";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Duplicate;
-
-    impl Task for Duplicate {
-        const NAME: &'static str = "duplicate";
-        type Input = Value;
-        type Output = Value;
-    }
+    const DUPLICATE: Task<Value, Value> = Task::new("duplicate");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn worker_rejects_duplicate_task_registration(pool: PgPool) -> Result<()> {
@@ -48,8 +27,8 @@ mod tests {
         let app = Steda::from_pool(pool).queue(queue)?;
         let duplicate = app
             .worker()
-            .task::<Duplicate>(async |_params: Value, _ctx| Ok(json!({"first": true})))
-            .task::<Duplicate>(async |_params: Value, _ctx| Ok(json!({"second": true})))
+            .task(DUPLICATE, async |_params: Value, _ctx| Ok(json!({"first": true})))
+            .task(DUPLICATE, async |_params: Value, _ctx| Ok(json!({"second": true})))
             .build();
         assert!(matches!(duplicate, Err(Error::InvalidOptions(_))));
         Ok(())
@@ -64,31 +43,22 @@ mod tests {
 
         let alpha_worker = alpha
             .worker()
-            .task::<AlphaOnly>(async |_params: Value, _ctx| Ok(json!({"worker": "alpha"})))
+            .task(ALPHA_ONLY, async |_params: Value, _ctx| Ok(json!({"worker": "alpha"})))
             .build()?;
         let beta_worker = beta
             .worker()
-            .task::<BetaOnly>(async |_params: Value, _ctx| Ok(json!({"worker": "beta"})))
+            .task(BETA_ONLY, async |_params: Value, _ctx| Ok(json!({"worker": "beta"})))
             .build()?;
 
-        let alpha_task = alpha.spawn::<AlphaOnly>(json!({})).await?;
-        let beta_task = beta.spawn::<BetaOnly>(json!({})).await?;
+        let alpha_task = alpha.spawn(ALPHA_ONLY, json!({})).await?;
+        let beta_task = beta.spawn(BETA_ONLY, json!({})).await?;
 
         run_worker_for_claims(&alpha_worker, alpha.metrics(), 1).await?;
-        assert!(matches!(
-            alpha.fetch_task_result(alpha_task.id()).await?,
-            Some(TaskResultSnapshot::Completed { .. })
-        ));
-        assert_eq!(
-            alpha.fetch_task_result(beta_task.id()).await?,
-            Some(TaskResultSnapshot::Pending)
-        );
+        assert!(matches!(alpha_task.snapshot().await?, Some(TaskSnapshot::Completed { .. })));
+        assert_eq!(beta_task.snapshot().await?, Some(TaskSnapshot::Pending));
 
         run_worker_for_claims(&beta_worker, beta.metrics(), 1).await?;
-        assert!(matches!(
-            beta.fetch_task_result(beta_task.id()).await?,
-            Some(TaskResultSnapshot::Completed { .. })
-        ));
+        assert!(matches!(beta_task.snapshot().await?, Some(TaskSnapshot::Completed { .. })));
 
         alpha.delete().await?;
         Ok(())

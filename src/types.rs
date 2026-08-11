@@ -2,12 +2,10 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
 use time::OffsetDateTime;
 use uuid::Uuid;
-
-use crate::error::Result;
 
 /// JSON value type for task parameters, headers, checkpoints, and results.
 pub type Json = JsonValue;
@@ -59,7 +57,7 @@ impl fmt::Display for TaskId {
 impl FromStr for TaskId {
     type Err = uuid::Error;
 
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         value.parse().map(Self::from_uuid)
     }
 }
@@ -107,7 +105,7 @@ impl fmt::Display for RunId {
 impl FromStr for RunId {
     type Err = uuid::Error;
 
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         value.parse().map(Self::from_uuid)
     }
 }
@@ -231,7 +229,7 @@ pub(crate) struct SpawnConfig {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SpawnResult {
     /// Unique logical task identifier.
-    pub id: TaskId,
+    pub task_id: TaskId,
 
     /// Whether this was a new task, false if deduplicated.
     pub created: bool,
@@ -317,23 +315,9 @@ pub enum TaskResultState {
     Cancelled,
 }
 
-/// Current task result snapshot.
-///
-/// Completion and failure payloads can be deserialized directly from the snapshot:
-///
-/// ```
-/// use steda::{TaskResultSnapshot, TaskResultState};
-/// use serde_json::json;
-///
-/// let snapshot = TaskResultSnapshot::Completed { result: json!({ "count": 3 }) };
-/// assert_eq!(snapshot.state(), TaskResultState::Completed);
-/// assert!(snapshot.is_terminal());
-/// assert_eq!(snapshot.result::<serde_json::Value>()?, Some(json!({ "count": 3 })));
-/// # Ok::<(), steda::Error>(())
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "state", rename_all = "lowercase")]
-pub enum TaskResultSnapshot {
+/// Internal JSON-erased task result snapshot returned by `PostgreSQL`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TaskResultSnapshot {
     /// Task is waiting to run.
     Pending,
 
@@ -360,45 +344,9 @@ pub enum TaskResultSnapshot {
 }
 
 impl TaskResultSnapshot {
-    /// State without payload.
-    pub const fn state(&self) -> TaskResultState {
-        match self {
-            Self::Pending => TaskResultState::Pending,
-            Self::Running => TaskResultState::Running,
-            Self::Sleeping => TaskResultState::Sleeping,
-            Self::Completed { .. } => TaskResultState::Completed,
-            Self::Failed { .. } => TaskResultState::Failed,
-            Self::Cancelled => TaskResultState::Cancelled,
-        }
-    }
-
-    /// Whether this snapshot is terminal.
-    pub const fn is_terminal(&self) -> bool {
+    /// Whether this raw database snapshot is terminal.
+    pub(crate) const fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed { .. } | Self::Failed { .. } | Self::Cancelled)
-    }
-
-    /// Deserialize the completion payload when this snapshot is completed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the completion payload cannot be deserialized.
-    pub fn result<T: DeserializeOwned>(&self) -> Result<Option<T>> {
-        match self {
-            Self::Completed { result } => Ok(Some(serde_json::from_value(result.clone())?)),
-            _ => Ok(None),
-        }
-    }
-
-    /// Deserialize the failure payload when this snapshot is failed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the failure payload cannot be deserialized.
-    pub fn failure<T: DeserializeOwned>(&self) -> Result<Option<T>> {
-        match self {
-            Self::Failed { failure } => Ok(Some(serde_json::from_value(failure.clone())?)),
-            _ => Ok(None),
-        }
     }
 }
 
@@ -409,10 +357,10 @@ pub(crate) struct ClaimedTask {
     pub(crate) run_id: RunId,
 
     /// Logical task identifier.
-    pub(crate) id: TaskId,
+    pub(crate) task_id: TaskId,
 
     /// Registered task name.
-    pub(crate) name: String,
+    pub(crate) task_name: String,
 
     /// Attempt number for this run.
     pub(crate) attempt: u32,
@@ -422,20 +370,4 @@ pub(crate) struct ClaimedTask {
 
     /// Task headers.
     pub(crate) headers: Option<JsonObject>,
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::TaskResultSnapshot;
-
-    #[test]
-    fn task_result_snapshot_serializes_with_state_tag() {
-        let snapshot = TaskResultSnapshot::Completed { result: json!({"ok": true}) };
-        assert_eq!(
-            serde_json::to_value(snapshot).unwrap(),
-            json!({"state": "completed", "result": {"ok": true}})
-        );
-    }
 }

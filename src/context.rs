@@ -7,6 +7,7 @@ use std::{
     time::Duration as StdDuration,
 };
 
+use futures_util::future::BoxFuture;
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::{PgPool, Row};
 use time::{OffsetDateTime, SignedDuration};
@@ -15,8 +16,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::{
     db::await_task_result_snapshot,
     error::{Error, Result, map_sqlx_error},
-    queue::validate_queue_name,
-    types::{ClaimedTask, Json, JsonObject, RunId, TaskId, TaskResultSnapshot},
+    task::{TaskRef, decode_result},
+    types::{ClaimedTask, Json, JsonObject, RunId, TaskId},
     workflow::{Sleep, Step},
 };
 
@@ -70,9 +71,9 @@ struct TaskContextInner {
 impl fmt::Debug for TaskContextInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TaskContextInner")
-            .field("id", &self.task.id)
+            .field("task_id", &self.task.task_id)
             .field("run_id", &self.task.run_id)
-            .field("name", &self.task.name)
+            .field("task_name", &self.task.task_name)
             .field("attempt", &self.task.attempt)
             .field("pool", &self.pool)
             .field("queue_name", &self.queue_name)
@@ -94,7 +95,7 @@ impl TaskContext {
             "#,
         )
         .bind(&queue_name)
-        .bind(task.id)
+        .bind(task.task_id)
         .bind(task.run_id)
         .fetch_all(&pool)
         .await
@@ -125,7 +126,7 @@ impl TaskContext {
 
     /// Return the task id.
     pub fn task_id(&self) -> TaskId {
-        self.inner.task.id
+        self.inner.task.task_id
     }
 
     /// Return the current run id.
@@ -135,7 +136,7 @@ impl TaskContext {
 
     /// Return the task name.
     pub fn task_name(&self) -> &str {
-        &self.inner.task.name
+        &self.inner.task.task_name
     }
 
     /// Return the queue name.
@@ -168,13 +169,13 @@ impl TaskContext {
     ///
     /// Returns an error if the step identity is invalid, the step function fails, or the
     /// checkpoint cannot be persisted or deserialized.
-    pub async fn step<S, F, Fut>(&self, _step: S, f: F) -> Result<S::Output>
+    pub async fn step<Output, F, Fut>(&self, step: Step<Output>, f: F) -> Result<Output>
     where
-        S: Step,
+        Output: Serialize + DeserializeOwned + Send + 'static,
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<S::Output>> + Send,
+        Fut: Future<Output = Result<Output>> + Send,
     {
-        let name = workflow_storage_name(STEP_PREFIX, S::NAME)?;
+        let name = workflow_storage_name(STEP_PREFIX, step.name())?;
         self.checkpoint(&name, f).await
     }
 
@@ -192,14 +193,14 @@ impl TaskContext {
     /// Returns [`Error::Suspended`] when the current attempt has been durably suspended,
     /// [`Error::Cancelled`] if a durable cancellation deadline wins, or another error if the
     /// duration cannot be represented or checkpoint/scheduling state cannot be persisted.
-    pub async fn sleep_for<S: Sleep>(&self, _sleep: S, duration: StdDuration) -> Result<()> {
+    pub async fn sleep_for(&self, sleep: Sleep, duration: StdDuration) -> Result<()> {
         let duration = SignedDuration::try_from(duration)
             .map_err(|err| Error::InvalidOptions(err.to_string()))?;
         let now = self.database_time().await?;
         let wake_at = now
             .checked_add(duration)
             .ok_or_else(|| Error::InvalidOptions("sleep wake time is out of range".to_owned()))?;
-        self.sleep_until_inner::<S>(wake_at).await
+        self.sleep_until_inner(sleep, wake_at).await
     }
 
     /// Durably suspend this logical task until `wake_at`.
@@ -216,13 +217,13 @@ impl TaskContext {
     /// Returns [`Error::Suspended`] when the current attempt has been durably suspended,
     /// [`Error::Cancelled`] if a durable cancellation deadline wins, or another error if the
     /// checkpoint cannot be read, written, or deserialized.
-    pub async fn sleep_until<S: Sleep>(&self, _sleep: S, wake_at: OffsetDateTime) -> Result<()> {
-        self.sleep_until_inner::<S>(wake_at).await
+    pub async fn sleep_until(&self, sleep: Sleep, wake_at: OffsetDateTime) -> Result<()> {
+        self.sleep_until_inner(sleep, wake_at).await
     }
 
-    /// Shared durable-sleep implementation after the marker value has established its type.
-    async fn sleep_until_inner<S: Sleep>(&self, wake_at: OffsetDateTime) -> Result<()> {
-        let name = workflow_storage_name(SLEEP_PREFIX, S::NAME)?;
+    /// Shared durable-sleep implementation after the sleep value has established its identity.
+    async fn sleep_until_inner(&self, sleep: Sleep, wake_at: OffsetDateTime) -> Result<()> {
+        let name = workflow_storage_name(SLEEP_PREFIX, sleep.name())?;
         let step_lock = self.step_lock(&name);
         let _guard = step_lock.lock().await;
 
@@ -241,36 +242,47 @@ impl TaskContext {
         }
     }
 
-    /// Wait for another queue's task to reach a terminal result state.
+    /// Begin waiting for another queue's typed task.
     ///
-    /// The terminal [`TaskResultSnapshot`] is checkpointed under an internal identity derived from
-    /// the target queue and task ID, so a later retry replays the completed wait. Unlike a durable
-    /// sleep, this
-    /// operation keeps the current worker execution slot occupied while polling.
+    /// The target [`TaskRef`] supplies the queue, task identity, and output type. The returned
+    /// [`TaskWait`] is awaitable directly and can be configured with a per-attempt timeout.
     ///
-    /// Same-queue waits are rejected because a finite worker pool can otherwise deadlock with
-    /// every slot occupied by parents waiting for children that require those same slots.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the target queue is the current queue or otherwise invalid,
-    /// checkpointing fails, the target task cannot be fetched, or the configured timeout elapses.
-    pub async fn await_task_result(
+    /// Same-queue waits are rejected when awaited because a finite worker pool can otherwise
+    /// deadlock with every slot occupied by parents waiting for children that need those slots.
+    pub fn await_task<'a, Input, Output>(
+        &'a self,
+        task: &TaskRef<Input, Output>,
+    ) -> TaskWait<'a, Input, Output>
+    where
+        Input: Serialize + DeserializeOwned + Send + 'static,
+        Output: Serialize + DeserializeOwned + Send + 'static,
+    {
+        TaskWait::new(self, task.clone())
+    }
+
+    /// Wait for one typed task reference and checkpoint its decoded output.
+    async fn await_task_ref<Input, Output>(
         &self,
-        task_id: TaskId,
-        options: AwaitTaskResultOptions,
-    ) -> Result<TaskResultSnapshot> {
-        let AwaitTaskResultOptions { queue, timeout } = options;
-        let queue = validate_queue_name(&queue)?;
-        if queue == self.inner.queue_name {
+        task: TaskRef<Input, Output>,
+        timeout: Option<StdDuration>,
+    ) -> Result<Output>
+    where
+        Input: Serialize + DeserializeOwned + Send + 'static,
+        Output: Serialize + DeserializeOwned + Send + 'static,
+    {
+        if task.queue_name() == self.inner.queue_name {
             return Err(Error::InvalidOptions(
-                "TaskContext::await_task_result cannot wait on tasks in the same queue because this can deadlock workers. Spawn the child in a different queue.".to_owned(),
+                "TaskContext::await_task cannot wait on tasks in the same queue because this can deadlock workers. Spawn the child in a different queue.".to_owned(),
             ));
         }
-        let checkpoint_name = format!("{TASK_WAIT_PREFIX}{queue}:{task_id}");
+
+        let checkpoint_name = format!("{TASK_WAIT_PREFIX}{}:{}", task.queue_name(), task.task_id());
         let pool = self.inner.pool.clone();
+        let queue_name = task.queue_name().to_owned();
+        let task_id = task.task_id();
         self.checkpoint(&checkpoint_name, async move || {
-            await_task_result_snapshot(&pool, &queue, task_id, timeout).await
+            let snapshot = await_task_result_snapshot(&pool, &queue_name, task_id, timeout).await?;
+            decode_result(snapshot)
         })
         .await
     }
@@ -320,7 +332,7 @@ impl TaskContext {
             "#,
         )
         .bind(&self.inner.queue_name)
-        .bind(self.inner.task.id)
+        .bind(self.inner.task.task_id)
         .bind(name)
         .bind(value)
         .bind(self.inner.task.run_id)
@@ -396,31 +408,51 @@ fn workflow_storage_name(prefix: &str, name: &str) -> Result<String> {
     Ok(format!("{prefix}{name}"))
 }
 
-/// Options for waiting on another task result from a task context.
+/// Awaitable typed cross-task result wait.
 ///
-/// A target queue is required because waiting on the current queue is rejected: a
-/// worker can otherwise consume all local capacity while waiting for work that only
-/// that same queue can execute.
-#[derive(Debug, Clone)]
-pub struct AwaitTaskResultOptions {
-    /// Queue containing the awaited task.
-    queue: String,
-
-    /// Optional timeout.
+/// Created by [`TaskContext::await_task`]. Awaiting polls the target task until it reaches a
+/// terminal state, decodes its typed output, and checkpoints that value in the parent workflow.
+#[must_use = "task waits do nothing until awaited"]
+pub struct TaskWait<'a, Input, Output> {
+    /// Parent task context whose workflow owns the durable wait checkpoint.
+    context: &'a TaskContext,
+    /// Durable typed target reference.
+    task: TaskRef<Input, Output>,
+    /// Optional timeout for this execution attempt's polling wait.
     timeout: Option<StdDuration>,
 }
 
-impl AwaitTaskResultOptions {
-    /// Create wait options for a task in `queue`.
-    #[must_use]
-    pub fn new(queue: impl Into<String>) -> Self {
-        Self { queue: queue.into(), timeout: None }
+impl<Input, Output> fmt::Debug for TaskWait<'_, Input, Output> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskWait")
+            .field("task", &self.task)
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, Input, Output> TaskWait<'a, Input, Output> {
+    /// Create a typed task wait.
+    const fn new(context: &'a TaskContext, task: TaskRef<Input, Output>) -> Self {
+        Self { context, task, timeout: None }
     }
 
-    /// Limit how long each execution attempt waits for the target result.
-    #[must_use]
+    /// Limit how long this execution attempt polls for the target result.
     pub const fn timeout(mut self, timeout: StdDuration) -> Self {
         self.timeout = Some(timeout);
         self
+    }
+}
+
+impl<'a, Input, Output> IntoFuture for TaskWait<'a, Input, Output>
+where
+    Input: Serialize + DeserializeOwned + Send + 'static,
+    Output: Serialize + DeserializeOwned + Send + 'static,
+{
+    type Output = Result<Output>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move { self.context.await_task_ref(self.task, self.timeout).await })
     }
 }

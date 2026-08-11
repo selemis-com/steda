@@ -19,45 +19,17 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, RetryStrategy, Steda, Task, TaskResultSnapshot};
+    use steda::{Error, Result, RetryStrategy, Steda, Task, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct IdempotencyRetry;
+    const IDEMPOTENCY_RETRY: Task<Value, Value> = Task::new("idempotency-retry");
 
-    impl Task for IdempotencyRetry {
-        const NAME: &'static str = "idempotency-retry";
-        type Input = Value;
-        type Output = Value;
-    }
+    const DIFFERENT_TASK: Task<Value, Value> = Task::new("different-task");
 
-    #[derive(Clone, Copy, Debug)]
-    struct DifferentTask;
+    const SPAWN_DEFAULTS: Task<Value, Value> = Task::new("spawn-defaults");
 
-    impl Task for DifferentTask {
-        const NAME: &'static str = "different-task";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct SpawnDefaults;
-
-    impl Task for SpawnDefaults {
-        const NAME: &'static str = "spawn-defaults";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct UnregisteredIdem;
-
-    impl Task for UnregisteredIdem {
-        const NAME: &'static str = "unregistered-idem";
-        type Input = Value;
-        type Output = Value;
-    }
+    const UNREGISTERED_IDEM: Task<Value, Value> = Task::new("unregistered-idem");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn idempotent_spawn_replays_and_rejects_conflicts(pool: PgPool) -> Result<()> {
@@ -66,29 +38,27 @@ mod tests {
         app.create().await?;
 
         let key = format!("idem-{}", unique_queue("key"));
-        let first = app
-            .spawn::<UnregisteredIdem>(json!({"value": 42}))
-            .idempotency_key(key.clone())
-            .await?;
+        let first =
+            app.spawn(UNREGISTERED_IDEM, json!({"value": 42})).idempotency_key(key.clone()).await?;
         let second =
-            app.spawn::<UnregisteredIdem>(json!({"value": 42})).idempotency_key(key).await?;
+            app.spawn(UNREGISTERED_IDEM, json!({"value": 42})).idempotency_key(key).await?;
 
         assert!(first.created());
         assert!(!second.created());
-        assert_eq!(first.id(), second.id());
+        assert_eq!(first.task_id(), second.task_id());
 
         let conflict_key = format!("conflict-{}", unique_queue("key"));
-        app.spawn::<UnregisteredIdem>(json!({"value": 1}))
+        app.spawn(UNREGISTERED_IDEM, json!({"value": 1}))
             .idempotency_key(conflict_key.clone())
             .await?;
         assert!(matches!(
-            app.spawn::<UnregisteredIdem>(json!({"value": 2}))
+            app.spawn(UNREGISTERED_IDEM, json!({"value": 2}))
                 .idempotency_key(conflict_key.clone())
                 .await,
             Err(Error::IdempotencyConflict)
         ));
         assert!(matches!(
-            app.spawn::<DifferentTask>(json!({"value": 1})).idempotency_key(conflict_key).await,
+            app.spawn(DIFFERENT_TASK, json!({"value": 1})).idempotency_key(conflict_key).await,
             Err(Error::IdempotencyConflict)
         ));
 
@@ -104,24 +74,24 @@ mod tests {
         app.create().await?;
         let worker = app
             .worker()
-            .task::<IdempotencyRetry>(async |_params: Value, _ctx| {
+            .task(IDEMPOTENCY_RETRY, async |_params: Value, _ctx| {
                 Err::<Value, Error>(Error::InvalidOptions("expected failure".to_owned()))
             })
             .build()?;
         let key = format!("retry-{}", unique_queue("key"));
 
         let spawned = app
-            .spawn::<IdempotencyRetry>(json!({}))
+            .spawn(IDEMPOTENCY_RETRY, json!({}))
             .max_attempts(1)
             .idempotency_key(key.clone())
             .await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        app.retry_task(spawned.id()).await?;
+        spawned.retry().await?;
 
         let replay =
-            app.spawn::<IdempotencyRetry>(json!({})).max_attempts(1).idempotency_key(key).await?;
+            app.spawn(IDEMPOTENCY_RETRY, json!({})).max_attempts(1).idempotency_key(key).await?;
         assert!(!replay.created());
-        assert_eq!(replay.id(), spawned.id());
+        assert_eq!(replay.task_id(), spawned.task_id());
 
         app.delete().await?;
         Ok(())
@@ -134,17 +104,15 @@ mod tests {
         app.create().await?;
         let key = format!("headers-{}", unique_queue("key"));
 
-        let first = app
-            .spawn::<UnregisteredIdem>(json!({"value": 42}))
-            .idempotency_key(key.clone())
-            .await?;
+        let first =
+            app.spawn(UNREGISTERED_IDEM, json!({"value": 42})).idempotency_key(key.clone()).await?;
         let replay = app
-            .spawn::<UnregisteredIdem>(json!({"value": 42}))
+            .spawn(UNREGISTERED_IDEM, json!({"value": 42}))
             .headers(Default::default())
             .idempotency_key(key)
             .await?;
         assert!(!replay.created());
-        assert_eq!(replay.id(), first.id());
+        assert_eq!(replay.task_id(), first.task_id());
 
         app.delete().await?;
         Ok(())
@@ -157,7 +125,7 @@ mod tests {
         app.create().await?;
 
         let error = app
-            .spawn::<UnregisteredIdem>(json!({}))
+            .spawn(UNREGISTERED_IDEM, json!({}))
             .idempotency_key("x".repeat(1025))
             .await
             .expect_err("oversized idempotency key must be rejected");
@@ -186,7 +154,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<SpawnDefaults>({
+            .task(SPAWN_DEFAULTS, {
                 let calls = calls.clone();
                 move |_params: Value, _ctx| {
                     let calls = calls.clone();
@@ -199,20 +167,17 @@ mod tests {
             .build()?;
 
         let defaulted = app
-            .spawn::<SpawnDefaults>(json!({}))
+            .spawn(SPAWN_DEFAULTS, json!({}))
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         for _ in 0..5 {
             run_worker_for_claims(&worker, app.metrics(), 1).await?;
         }
         assert_eq!(calls.load(Ordering::SeqCst), 5);
-        assert!(matches!(
-            app.fetch_task_result(defaulted.id()).await?,
-            Some(TaskResultSnapshot::Failed { .. })
-        ));
+        assert!(matches!(defaulted.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
 
         let explicit = app
-            .spawn::<SpawnDefaults>(json!({}))
+            .spawn(SPAWN_DEFAULTS, json!({}))
             .max_attempts(3)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -220,10 +185,7 @@ mod tests {
             run_worker_for_claims(&worker, app.metrics(), 1).await?;
         }
         assert_eq!(calls.load(Ordering::SeqCst), 8);
-        assert!(matches!(
-            app.fetch_task_result(explicit.id()).await?,
-            Some(TaskResultSnapshot::Failed { .. })
-        ));
+        assert!(matches!(explicit.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
 
         app.delete().await?;
         Ok(())

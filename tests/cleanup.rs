@@ -13,38 +13,16 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool};
-    use steda::{
-        Error, QueuePolicyOptions, Result, Steda, Step, Task, TaskContext, TaskResultSnapshot,
-    };
+    use steda::{Error, QueuePolicyOptions, Result, Steda, Step, Task, TaskContext, TaskSnapshot};
     use tokio::time::timeout;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct CleanupCheckpoint;
+    const CLEANUP_CHECKPOINT: Step<Value> = Step::new("cleanup-checkpoint");
 
-    impl Step for CleanupCheckpoint {
-        const NAME: &'static str = "cleanup-checkpoint";
-        type Output = Value;
-    }
+    const CLEANUP_RETRY: Task<Value, Value> = Task::new("cleanup-retry");
 
-    #[derive(Clone, Copy, Debug)]
-    struct CleanupRetry;
-
-    impl Task for CleanupRetry {
-        const NAME: &'static str = "cleanup-retry";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct CleanupTestTask;
-
-    impl Task for CleanupTestTask {
-        const NAME: &'static str = "cleanup-test-task";
-        type Input = Value;
-        type Output = Value;
-    }
+    const CLEANUP_TEST_TASK: Task<Value, Value> = Task::new("cleanup-test-task");
 
     fn relation_name(prefix: &str, queue: &str) -> String {
         format!("{prefix}_{queue}")
@@ -57,18 +35,18 @@ mod tests {
         app.create().await?;
         let worker = app
             .worker()
-            .task::<CleanupRetry>(async |_params: Value, _ctx| {
+            .task(CLEANUP_RETRY, async |_params: Value, _ctx| {
                 Err::<Value, Error>(Error::InvalidOptions("fail once".to_owned()))
             })
             .build()?;
 
-        let spawned = app.spawn::<CleanupRetry>(json!({})).max_attempts(1).await?;
+        let spawned = app.spawn(CLEANUP_RETRY, json!({})).max_attempts(1).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         let mut retry_tx = pool.begin().await?;
         let retry_run: uuid::Uuid = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
             .bind(&queue)
-            .bind(spawned.id())
+            .bind(spawned.task_id())
             .fetch_one(&mut *retry_tx)
             .await?;
 
@@ -80,15 +58,15 @@ mod tests {
         assert_eq!(deleted, 0);
 
         retry_tx.commit().await?;
-        let task = app.fetch_task_result(spawned.id()).await?;
-        assert_eq!(task, Some(TaskResultSnapshot::Pending));
+        let task = spawned.snapshot().await?;
+        assert_eq!(task, Some(TaskSnapshot::Pending));
 
         let run_table = relation_name("runs", &queue);
         let query =
             format!("SELECT count(*) FROM steda.{run_table} WHERE id = $1 AND task_id = $2");
         let count: i64 = sqlx::query_scalar(AssertSqlSafe(query))
             .bind(retry_run)
-            .bind(spawned.id())
+            .bind(spawned.task_id())
             .fetch_one(&pool)
             .await?;
         assert_eq!(count, 1);
@@ -105,24 +83,21 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<CleanupTestTask>(async |_params: Value, ctx: TaskContext| {
-                ctx.step(CleanupCheckpoint, async || Ok::<Value, Error>(json!({"status": "done"})))
+            .task(CLEANUP_TEST_TASK, async |_params: Value, ctx: TaskContext| {
+                ctx.step(CLEANUP_CHECKPOINT, async || Ok::<Value, Error>(json!({"status": "done"})))
                     .await
             })
             .build()?;
 
-        let spawned = app.spawn::<CleanupTestTask>(json!({})).await?;
+        let spawned = app.spawn(CLEANUP_TEST_TASK, json!({})).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert!(matches!(
-            app.fetch_task_result(spawned.id()).await?,
-            Some(TaskResultSnapshot::Completed { .. })
-        ));
+        assert!(matches!(spawned.snapshot().await?, Some(TaskSnapshot::Completed { .. })));
 
         app.set_policy(QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(100))
             .await?;
         let tasks_deleted = app.cleanup().await?;
         assert_eq!(tasks_deleted, 1);
-        assert!(app.fetch_task_result(spawned.id()).await?.is_none());
+        assert!(spawned.snapshot().await?.is_none());
 
         for prefix in ["tasks", "runs", "checkpoints"] {
             let table = relation_name(prefix, &queue);
@@ -159,18 +134,18 @@ mod tests {
 
         let first_worker = first
             .worker()
-            .task::<CleanupTestTask>(async |_params: Value, _ctx| Ok(json!({"done": true})))
+            .task(CLEANUP_TEST_TASK, async |_params: Value, _ctx| Ok(json!({"done": true})))
             .build()?;
         let second_worker = second
             .worker()
-            .task::<CleanupTestTask>(async |_params: Value, _ctx| Ok(json!({"done": true})))
+            .task(CLEANUP_TEST_TASK, async |_params: Value, _ctx| Ok(json!({"done": true})))
             .build()?;
 
         let first_tasks = [
-            first.spawn::<CleanupTestTask>(json!({})).await?,
-            first.spawn::<CleanupTestTask>(json!({})).await?,
+            first.spawn(CLEANUP_TEST_TASK, json!({})).await?,
+            first.spawn(CLEANUP_TEST_TASK, json!({})).await?,
         ];
-        let second_task = second.spawn::<CleanupTestTask>(json!({})).await?;
+        let second_task = second.spawn(CLEANUP_TEST_TASK, json!({})).await?;
         run_worker_for_claims(&first_worker, first.metrics(), 2).await?;
         run_worker_for_claims(&second_worker, second.metrics(), 1).await?;
 
@@ -184,14 +159,14 @@ mod tests {
         assert_eq!(cleanup.get(&second_name), Some(&1));
 
         let first_remaining = [
-            first.fetch_task_result(first_tasks[0].id()).await?.is_some(),
-            first.fetch_task_result(first_tasks[1].id()).await?.is_some(),
+            first_tasks[0].snapshot().await?.is_some(),
+            first_tasks[1].snapshot().await?.is_some(),
         ]
         .into_iter()
         .filter(|remaining| *remaining)
         .count();
         assert_eq!(first_remaining, 1);
-        assert_eq!(second.fetch_task_result(second_task.id()).await?, None);
+        assert_eq!(second_task.snapshot().await?, None);
 
         first.delete().await?;
         second.delete().await?;
@@ -203,7 +178,7 @@ mod tests {
         let queue = unique_queue("cleanup_boundary");
         let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
         app.create().await?;
-        let spawned = app.spawn::<CleanupTestTask>(json!({})).await?;
+        let spawned = app.spawn(CLEANUP_TEST_TASK, json!({})).await?;
         let tasks_table = relation_name("tasks", &queue);
         let runs_table = relation_name("runs", &queue);
         let mut connection = pool.acquire().await?;
@@ -213,7 +188,7 @@ mod tests {
             .await?;
         let run_query = format!("SELECT last_attempt_run FROM steda.{tasks_table} WHERE id = $1");
         let run_id: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(run_query))
-            .bind(spawned.id())
+            .bind(spawned.task_id())
             .fetch_one(&mut *connection)
             .await?;
         let complete_run = format!(
@@ -223,7 +198,7 @@ mod tests {
         let complete_task =
             format!("UPDATE steda.{tasks_table} SET state = 'completed' WHERE id = $1");
         sqlx::query(AssertSqlSafe(complete_task))
-            .bind(spawned.id())
+            .bind(spawned.task_id())
             .execute(&mut *connection)
             .await?;
         sqlx::query("SELECT steda.set_queue_policy($1, 0, 100)")

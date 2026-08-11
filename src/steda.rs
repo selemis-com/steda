@@ -8,6 +8,7 @@ use crate::{
     error::{Error, Result},
     execution::{ExecutionRequest, ExecutionResponse, ExecutionService, SharedExecutionService},
     queue::Queue,
+    task::{TaskHandle, TaskRef, validate_task_name},
     types::QueueCleanup,
 };
 
@@ -61,6 +62,23 @@ impl Steda {
     /// Returns an error when `name` is not a valid Steda queue name.
     pub fn queue(&self, name: impl Into<String>) -> Result<Queue> {
         Queue::from_parts(self.pool.clone(), name, self.execution.clone())
+    }
+
+    /// Attach a durable typed task reference to this Steda connection.
+    ///
+    /// The returned handle is lightweight and does not query the database until it is observed or
+    /// controlled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the persisted task name or referenced queue name is invalid.
+    pub fn task<Input, Output>(
+        &self,
+        task: &TaskRef<Input, Output>,
+    ) -> Result<TaskHandle<Input, Output>> {
+        validate_task_name(task.task_name())?;
+        let queue = self.queue(task.queue_name().to_owned())?;
+        Ok(TaskHandle::from_ref(queue, task.clone()))
     }
 
     /// List all queues in this Steda installation.

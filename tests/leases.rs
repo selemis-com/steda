@@ -17,64 +17,23 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
-        Result, RetryStrategy, RunId, Steda, Step, Task, TaskContext, TaskId, TaskResultSnapshot,
+        Result, RetryStrategy, RunId, Steda, Step, Task, TaskContext, TaskId, TaskSnapshot,
     };
     use time::OffsetDateTime;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct StaleCheckpoint;
+    const STALE_CHECKPOINT: Step<Value> = Step::new("stale-checkpoint");
 
-    impl Step for StaleCheckpoint {
-        const NAME: &'static str = "stale-checkpoint";
-        type Output = Value;
-    }
+    const ALPHA_ONLY: Task<Value, Value> = Task::new("alpha-only");
 
-    #[derive(Clone, Copy, Debug)]
-    struct AlphaOnly;
+    const CLAIMED_ONLY: Task<Value, Value> = Task::new("claimed-only");
 
-    impl Task for AlphaOnly {
-        const NAME: &'static str = "alpha-only";
-        type Input = Value;
-        type Output = Value;
-    }
+    const HANG_PAST_LEASE: Task<Value, Value> = Task::new("hang-past-lease");
 
-    #[derive(Clone, Copy, Debug)]
-    struct ClaimedOnly;
+    const LOSE_LEASE: Task<Value, Value> = Task::new("lose-lease");
 
-    impl Task for ClaimedOnly {
-        const NAME: &'static str = "claimed-only";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct HangPastLease;
-
-    impl Task for HangPastLease {
-        const NAME: &'static str = "hang-past-lease";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct LoseLease;
-
-    impl Task for LoseLease {
-        const NAME: &'static str = "lose-lease";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct OtherTask;
-
-    impl Task for OtherTask {
-        const NAME: &'static str = "other-task";
-        type Input = Value;
-        type Output = Value;
-    }
+    const OTHER_TASK: Task<Value, Value> = Task::new("other-task");
 
     struct TaskRow {
         state: String,
@@ -121,7 +80,7 @@ mod tests {
         app.create().await?;
 
         let first = app
-            .spawn::<ClaimedOnly>(json!({}))
+            .spawn(CLAIMED_ONLY, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .await?;
@@ -131,15 +90,15 @@ mod tests {
                 .bind("lease-sql-worker")
                 .bind(30_i32)
                 .bind(1_i32)
-                .bind(vec![ClaimedOnly::NAME.to_owned()])
+                .bind(vec![CLAIMED_ONLY.name().to_owned()])
                 .fetch_one(&pool)
                 .await?;
 
-        let second = app.spawn::<OtherTask>(json!({})).await?;
+        let second = app.spawn(OTHER_TASK, json!({})).await?;
         let ownership_error =
             sqlx::query("SELECT steda.set_task_checkpoint_state($1, $2, $3, $4, $5)")
                 .bind(&queue)
-                .bind(second.id())
+                .bind(second.task_id())
                 .bind("cross-task")
                 .bind(json!({"bad": true}))
                 .bind(run_id)
@@ -166,7 +125,7 @@ mod tests {
                 .expect_err("expired suspension must fail"),
             sqlx::query("SELECT steda.set_task_checkpoint_state($1, $2, $3, $4, $5)")
                 .bind(&queue)
-                .bind(first.id())
+                .bind(first.task_id())
                 .bind("late-checkpoint")
                 .bind(json!({"late": true}))
                 .bind(run_id)
@@ -184,7 +143,7 @@ mod tests {
         for error in &expired_transitions {
             assert_sqlstate(error, "AB003");
         }
-        assert!(fetch_checkpoints(&pool, &queue, first.id()).await?.is_empty());
+        assert!(fetch_checkpoints(&pool, &queue, first.task_id()).await?.is_empty());
 
         let reaped: bool = sqlx::query_scalar("SELECT steda.reap_expired_run($1, $2)")
             .bind(&queue)
@@ -192,7 +151,7 @@ mod tests {
             .fetch_one(&pool)
             .await?;
         assert!(reaped);
-        assert_eq!(fetch_task(&pool, &queue, first.id()).await?.state, "failed");
+        assert_eq!(fetch_task(&pool, &queue, first.task_id()).await?.state, "failed");
 
         app.delete().await?;
         Ok(())
@@ -207,7 +166,7 @@ mod tests {
         let checkpoint_rejected = Arc::new(AtomicBool::new(false));
         let worker = app
             .worker()
-            .task::<LoseLease>({
+            .task(LOSE_LEASE, {
                 let pool = pool.clone();
                 let queue = queue.clone();
                 let checkpoint_rejected = checkpoint_rejected.clone();
@@ -219,7 +178,7 @@ mod tests {
                         force_expire_run(&pool, &queue, ctx.run_id()).await?;
 
                         let checkpoint_result: Result<Value> =
-                            ctx.step(StaleCheckpoint, async || Ok(json!({"bad": true}))).await;
+                            ctx.step(STALE_CHECKPOINT, async || Ok(json!({"bad": true}))).await;
                         let checkpoint_error =
                             checkpoint_result.expect_err("expired checkpoint must lose ownership");
                         checkpoint_rejected
@@ -232,15 +191,15 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<LoseLease>(json!({}))
+            .spawn(LOSE_LEASE, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert!(checkpoint_rejected.load(Ordering::SeqCst));
-        assert!(fetch_checkpoints(&pool, &queue, spawned.id()).await?.is_empty());
-        assert_eq!(fetch_task(&pool, &queue, spawned.id()).await?.state, "running");
+        assert!(fetch_checkpoints(&pool, &queue, spawned.task_id()).await?.is_empty());
+        assert_eq!(fetch_task(&pool, &queue, spawned.task_id()).await?.state, "running");
 
         let metrics = app.metrics();
         assert_eq!(metrics.lease_lost_executions(), 1);
@@ -258,7 +217,7 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<HangPastLease>({
+            .task(HANG_PAST_LEASE, {
                 let pool = pool.clone();
                 let queue = queue.clone();
                 move |_params: Value, ctx: TaskContext| {
@@ -273,14 +232,14 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<HangPastLease>(json!({}))
+            .spawn(HANG_PAST_LEASE, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(app.metrics().lease_lost_executions(), 1);
-        let task = fetch_task(&pool, &queue, spawned.id()).await?;
+        let task = fetch_task(&pool, &queue, spawned.task_id()).await?;
         assert_eq!(task.state, "failed");
         let run_id = task.last_attempt_run;
 
@@ -303,8 +262,8 @@ mod tests {
         let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
         app.create().await?;
 
-        let spawned = app.spawn::<AlphaOnly>(json!({})).await?;
-        let capabilities = vec![AlphaOnly::NAME.to_owned()];
+        let spawned = app.spawn(ALPHA_ONLY, json!({})).await?;
+        let capabilities = vec![ALPHA_ONLY.name().to_owned()];
 
         let zero_lease = sqlx::query("SELECT run_id FROM steda.claim_tasks($1, $2, $3, $4, $5)")
             .bind(&queue)
@@ -326,7 +285,7 @@ mod tests {
                 .execute(&pool)
                 .await;
         assert!(no_capabilities.is_err());
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Pending));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Pending));
 
         let row = sqlx::query("SELECT run_id FROM steda.claim_tasks($1, $2, $3, $4, $5) LIMIT 1")
             .bind(&queue)

@@ -13,39 +13,15 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{
-        AwaitTaskResultOptions, Error, Result, RetryStrategy, Steda, Task, TaskContext, TaskId,
-        TaskResultSnapshot,
-    };
+    use steda::{Error, Result, RetryStrategy, Steda, Task, TaskContext, TaskRef, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct Child;
+    const CHILD: Task<Value, Value> = Task::new("wait-child");
 
-    impl Task for Child {
-        const NAME: &'static str = "wait-child";
-        type Input = Value;
-        type Output = Value;
-    }
+    const PARENT: Task<TaskRef<Value, Value>, Value> = Task::new("wait-parent");
 
-    #[derive(Clone, Copy, Debug)]
-    struct Parent;
-
-    impl Task for Parent {
-        const NAME: &'static str = "wait-parent";
-        type Input = TaskId;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct SameQueueWait;
-
-    impl Task for SameQueueWait {
-        const NAME: &'static str = "same-queue-wait";
-        type Input = TaskId;
-        type Output = Value;
-    }
+    const SAME_QUEUE_WAIT: Task<TaskRef<Value, Value>, Value> = Task::new("same-queue-wait");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn cross_queue_wait_is_reused_from_checkpoint_after_retry(pool: PgPool) -> Result<()> {
@@ -59,40 +35,27 @@ mod tests {
 
         let child_worker = child_queue
             .worker()
-            .task::<Child>(async |_params: Value, _ctx| Ok(json!({"value": 42})))
+            .task(CHILD, async |_params: Value, _ctx| Ok(json!({"value": 42})))
             .build()?;
-        let child = child_queue.spawn::<Child>(json!({})).await?;
+        let child = child_queue.spawn(CHILD, json!({})).await?;
         run_worker_for_claims(&child_worker, child_queue.metrics(), 1).await?;
         assert_eq!(child.result().await?, json!({"value": 42}));
 
         let parent_worker = parent_queue
             .worker()
-            .task::<Parent>({
-                let child_name = child_name.clone();
-                move |child_id: TaskId, ctx: TaskContext| {
-                    let child_name = child_name.clone();
-                    async move {
-                        let snapshot = ctx
-                            .await_task_result(child_id, AwaitTaskResultOptions::new(child_name))
-                            .await?;
-                        if ctx.attempt() == 1 {
-                            return Err(Error::InvalidOptions(
-                                "retry after durable child result".to_owned(),
-                            ));
-                        }
-                        let TaskResultSnapshot::Completed { result } = snapshot else {
-                            return Err(Error::Other(
-                                "durable child wait returned non-completed result".to_owned(),
-                            ));
-                        };
-                        Ok(result)
-                    }
+            .task(PARENT, async |child: TaskRef<Value, Value>, ctx: TaskContext| {
+                let result = ctx.await_task(&child).await?;
+                if ctx.attempt() == 1 {
+                    return Err(Error::InvalidOptions(
+                        "retry after durable child result".to_owned(),
+                    ));
                 }
+                Ok(result)
             })
             .build()?;
 
         let parent = parent_queue
-            .spawn::<Parent>(child.id())
+            .spawn(PARENT, child.task_ref())
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -115,22 +78,19 @@ mod tests {
 
         let worker = queue
             .worker()
-            .task::<SameQueueWait>(async |task_id: TaskId, ctx: TaskContext| {
-                let own_queue = ctx.queue_name().to_owned();
-                let error = ctx
-                    .await_task_result(task_id, AwaitTaskResultOptions::new(own_queue))
-                    .await
-                    .expect_err("same-queue task wait must be rejected");
+            .task(SAME_QUEUE_WAIT, async |task: TaskRef<Value, Value>, ctx: TaskContext| {
+                let error =
+                    ctx.await_task(&task).await.expect_err("same-queue task wait must be rejected");
                 Ok(json!({"invalid_options": matches!(error, Error::InvalidOptions(_))}))
             })
             .build()?;
 
-        let target = queue.spawn::<Child>(json!({})).await?;
-        let waiter = queue.spawn::<SameQueueWait>(target.id()).await?;
+        let target = queue.spawn(CHILD, json!({})).await?;
+        let waiter = queue.spawn(SAME_QUEUE_WAIT, target.task_ref()).await?;
         run_worker_for_claims(&worker, queue.metrics(), 1).await?;
 
         assert_eq!(waiter.result().await?, json!({"invalid_options": true}));
-        assert_eq!(queue.fetch_task_result(target.id()).await?, Some(TaskResultSnapshot::Pending));
+        assert_eq!(target.snapshot().await?, Some(TaskSnapshot::Pending));
 
         queue.delete().await?;
         Ok(())

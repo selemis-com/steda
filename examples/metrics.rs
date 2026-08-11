@@ -33,14 +33,8 @@ struct MetricProbeOutput {
     label: String,
 }
 
-/// Durable task contract used to generate bounded execution outcomes.
-struct MetricProbe;
-
-impl Task for MetricProbe {
-    const NAME: &'static str = "metric-probe";
-    type Input = MetricProbeInput;
-    type Output = MetricProbeOutput;
-}
+/// Task definition used to generate bounded execution outcomes.
+const METRIC_PROBE: Task<MetricProbeInput, MetricProbeOutput> = Task::new("metric-probe");
 
 /// Run the queue-metrics example.
 #[tokio::main(flavor = "current_thread")]
@@ -56,7 +50,7 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<MetricProbe>(async |input: MetricProbeInput, _ctx: TaskContext| {
+        .task(METRIC_PROBE, async |input: MetricProbeInput, _ctx: TaskContext| {
             if input.should_fail {
                 return Err(Error::Other("simulated application failure".to_owned()));
             }
@@ -69,16 +63,16 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let successful = queue
-        .spawn::<MetricProbe>(MetricProbeInput {
-            label: "successful attempt".to_owned(),
-            should_fail: false,
-        })
+        .spawn(
+            METRIC_PROBE,
+            MetricProbeInput { label: "successful attempt".to_owned(), should_fail: false },
+        )
         .await?;
     let failing = queue
-        .spawn::<MetricProbe>(MetricProbeInput {
-            label: "failed attempt".to_owned(),
-            should_fail: true,
-        })
+        .spawn(
+            METRIC_PROBE,
+            MetricProbeInput { label: "failed attempt".to_owned(), should_fail: true },
+        )
         .max_attempts(1)
         .retry_strategy(RetryStrategy::none())
         .await?;

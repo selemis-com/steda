@@ -25,34 +25,13 @@ mod tests {
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
     /// Task executed on the first queue.
-    #[derive(Clone, Copy, Debug)]
-    struct First;
-
-    impl Task for First {
-        const NAME: &'static str = "first";
-        type Input = Value;
-        type Output = Value;
-    }
+    const FIRST: Task<Value, Value> = Task::new("first");
 
     /// Task executed on the second queue.
-    #[derive(Clone, Copy, Debug)]
-    struct Second;
-
-    impl Task for Second {
-        const NAME: &'static str = "second";
-        type Input = Value;
-        type Output = Value;
-    }
+    const SECOND: Task<Value, Value> = Task::new("second");
 
     /// Task whose middleware panics before invoking its handler.
-    #[derive(Clone, Copy, Debug)]
-    struct LayerPanic;
-
-    impl Task for LayerPanic {
-        const NAME: &'static str = "layer-panic";
-        type Input = Value;
-        type Output = Value;
-    }
+    const LAYER_PANIC: Task<Value, Value> = Task::new("layer-panic");
 
     /// Echo a JSON task payload unchanged.
     async fn echo(input: Value, _context: steda::TaskContext) -> Result<Value> {
@@ -154,11 +133,11 @@ mod tests {
         first.create().await?;
         second.create().await?;
 
-        let first_worker = first.worker().task::<First>(echo).build()?;
-        let second_worker = second.worker().task::<Second>(echo).build()?;
+        let first_worker = first.worker().task(FIRST, echo).build()?;
+        let second_worker = second.worker().task(SECOND, echo).build()?;
 
-        let first_task = first.spawn::<First>(json!({"queue": 1})).await?;
-        let second_task = second.spawn::<Second>(json!({"queue": 2})).await?;
+        let first_task = first.spawn(FIRST, json!({"queue": 1})).await?;
+        let second_task = second.spawn(SECOND, json!({"queue": 2})).await?;
 
         run_worker_for_claims(&first_worker, first.metrics(), 1).await?;
         run_worker_for_claims(&second_worker, second.metrics(), 1).await?;
@@ -174,8 +153,8 @@ mod tests {
         assert_eq!(
             observed,
             vec![
-                (first_queue.clone(), First::NAME.to_owned()),
-                (second_queue.clone(), Second::NAME.to_owned()),
+                (first_queue.clone(), FIRST.name().to_owned()),
+                (second_queue.clone(), SECOND.name().to_owned()),
             ]
         );
 
@@ -190,18 +169,15 @@ mod tests {
         let steda = Steda::builder(pool).layer(PanicLayer).build();
         let queue = steda.queue(queue_name)?;
         queue.create().await?;
-        let worker = queue.worker().task::<LayerPanic>(unreachable_handler).build()?;
+        let worker = queue.worker().task(LAYER_PANIC, unreachable_handler).build()?;
         let task = queue
-            .spawn::<LayerPanic>(json!({}))
+            .spawn(LAYER_PANIC, json!({}))
             .max_attempts(1)
             .retry_strategy(steda::RetryStrategy::none())
             .await?;
 
         run_worker_for_claims(&worker, queue.metrics(), 1).await?;
-        assert!(matches!(
-            queue.fetch_task_result(task.id()).await?,
-            Some(steda::TaskResultSnapshot::Failed { .. })
-        ));
+        assert!(matches!(task.snapshot().await?, Some(steda::TaskSnapshot::Failed { .. })));
 
         queue.delete().await?;
         Ok(())

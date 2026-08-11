@@ -26,63 +26,19 @@ mod tests {
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct ExpensiveCheckpoint;
+    const EXPENSIVE_CHECKPOINT: Step<i64> = Step::new("expensive");
 
-    impl Step for ExpensiveCheckpoint {
-        const NAME: &'static str = "expensive";
-        type Output = i64;
-    }
+    const SHARED_CHECKPOINT: Step<Value> = Step::new("shared");
 
-    #[derive(Clone, Copy, Debug)]
-    struct SharedCheckpoint;
+    const SAME_CHECKPOINT: Step<Value> = Step::new("same");
 
-    impl Step for SharedCheckpoint {
-        const NAME: &'static str = "shared";
-        type Output = Value;
-    }
+    const SAME_SLEEP: Sleep = Sleep::new("same");
 
-    #[derive(Clone, Copy, Debug)]
-    struct SameCheckpoint;
+    const CACHED_STEP: Task<Value, Value> = Task::new("cached-step");
 
-    impl Step for SameCheckpoint {
-        const NAME: &'static str = "same";
-        type Output = Value;
-    }
+    const CHECKPOINT_ONLY: Task<Value, Value> = Task::new("checkpoint-only");
 
-    #[derive(Clone, Copy, Debug)]
-    struct SameSleep;
-
-    impl Sleep for SameSleep {
-        const NAME: &'static str = "same";
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct CachedStep;
-
-    impl Task for CachedStep {
-        const NAME: &'static str = "cached-step";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct CheckpointOnly;
-
-    impl Task for CheckpointOnly {
-        const NAME: &'static str = "checkpoint-only";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct MixedWorkflowIdentity;
-
-    impl Task for MixedWorkflowIdentity {
-        const NAME: &'static str = "mixed-workflow-identity";
-        type Input = Value;
-        type Output = Value;
-    }
+    const MIXED_WORKFLOW_IDENTITY: Task<Value, Value> = Task::new("mixed-workflow-identity");
 
     async fn fetch_checkpoints(
         pool: &PgPool,
@@ -105,7 +61,7 @@ mod tests {
         let attempts = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<CachedStep>({
+            .task(CACHED_STEP, {
                 let step_executions = step_executions.clone();
                 let attempts = attempts.clone();
                 move |_params: Value, ctx: TaskContext| {
@@ -115,7 +71,7 @@ mod tests {
                         let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                         let executions_for_step = step_executions.clone();
                         let value: i64 = ctx
-                            .step(ExpensiveCheckpoint, async move || {
+                            .step(EXPENSIVE_CHECKPOINT, async move || {
                                 executions_for_step.fetch_add(1, Ordering::SeqCst);
                                 Ok(42)
                             })
@@ -130,14 +86,14 @@ mod tests {
             .build()?;
 
         let spawned = app
-            .spawn::<CachedStep>(json!({}))
+            .spawn(CACHED_STEP, json!({}))
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(step_executions.load(Ordering::SeqCst), 1);
         assert_eq!(
-            fetch_checkpoints(&pool, &queue, spawned.id()).await?,
+            fetch_checkpoints(&pool, &queue, spawned.task_id()).await?,
             vec![("$step:expensive".to_owned(), json!(42))]
         );
 
@@ -161,7 +117,7 @@ mod tests {
         let executions = Arc::new(AtomicUsize::new(0));
         let worker = app
             .worker()
-            .task::<CheckpointOnly>({
+            .task(CHECKPOINT_ONLY, {
                 let executions = Arc::clone(&executions);
                 move |_params: Value, ctx: TaskContext| {
                     let first_ctx = ctx.clone();
@@ -170,12 +126,12 @@ mod tests {
                     let second_executions = Arc::clone(&executions);
                     async move {
                         let (first, second) = tokio::join!(
-                            first_ctx.step(SharedCheckpoint, async move || {
+                            first_ctx.step(SHARED_CHECKPOINT, async move || {
                                 first_executions.fetch_add(1, Ordering::SeqCst);
                                 sleep(Duration::from_millis(50)).await;
                                 Ok::<_, Error>(json!({"source": "first"}))
                             }),
-                            second_ctx.step(SharedCheckpoint, async move || {
+                            second_ctx.step(SHARED_CHECKPOINT, async move || {
                                 second_executions.fetch_add(1, Ordering::SeqCst);
                                 Ok::<_, Error>(json!({"source": "second"}))
                             }),
@@ -189,13 +145,13 @@ mod tests {
             })
             .build()?;
 
-        let spawned = app.spawn::<CheckpointOnly>(json!({})).await?;
+        let spawned = app.spawn(CHECKPOINT_ONLY, json!({})).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         assert_eq!(executions.load(Ordering::SeqCst), 1);
         let result = spawned.result().await?;
         assert_eq!(
-            fetch_checkpoints(&pool, &queue, spawned.id()).await?,
+            fetch_checkpoints(&pool, &queue, spawned.task_id()).await?,
             vec![("$step:shared".to_owned(), result["checkpoint"].clone())]
         );
 
@@ -213,18 +169,18 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<MixedWorkflowIdentity>(async |_params: Value, ctx: TaskContext| {
+            .task(MIXED_WORKFLOW_IDENTITY, async |_params: Value, ctx: TaskContext| {
                 let value =
-                    ctx.step(SameCheckpoint, async || Ok::<_, Error>(json!({"value": 1}))).await?;
-                ctx.sleep_for(SameSleep, Duration::ZERO).await?;
+                    ctx.step(SAME_CHECKPOINT, async || Ok::<_, Error>(json!({"value": 1}))).await?;
+                ctx.sleep_for(SAME_SLEEP, Duration::ZERO).await?;
                 Ok(value)
             })
             .build()?;
 
-        let spawned = app.spawn::<MixedWorkflowIdentity>(json!({})).await?;
+        let spawned = app.spawn(MIXED_WORKFLOW_IDENTITY, json!({})).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
-        let checkpoints = fetch_checkpoints(&pool, &queue, spawned.id()).await?;
+        let checkpoints = fetch_checkpoints(&pool, &queue, spawned.task_id()).await?;
         let names: Vec<_> = checkpoints.into_iter().map(|(name, _)| name).collect();
         assert_eq!(names, vec!["$sleep:same".to_owned(), "$step:same".to_owned()]);
         assert_eq!(spawned.result().await?, json!({"value": 1}));
@@ -240,7 +196,7 @@ mod tests {
         app.create().await?;
 
         let spawned = app
-            .spawn::<CheckpointOnly>(json!({}))
+            .spawn(CHECKPOINT_ONLY, json!({}))
             .max_attempts(2)
             .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
@@ -250,7 +206,7 @@ mod tests {
                 .bind("checkpoint-worker")
                 .bind(30_i32)
                 .bind(1_i32)
-                .bind(vec![CheckpointOnly::NAME.to_owned()])
+                .bind(vec![CHECKPOINT_ONLY.name().to_owned()])
                 .fetch_one(&pool)
                 .await?;
 
@@ -258,7 +214,7 @@ mod tests {
             "SELECT checkpoint_state, written FROM steda.set_task_checkpoint_state($1, $2, $3, $4, $5)",
         )
         .bind(&queue)
-        .bind(spawned.id())
+        .bind(spawned.task_id())
         .bind("immutable")
         .bind(json!({"value": 1}))
         .bind(run_id)
@@ -280,7 +236,7 @@ mod tests {
                 .bind("checkpoint-worker-2")
                 .bind(30_i32)
                 .bind(1_i32)
-                .bind(vec![CheckpointOnly::NAME.to_owned()])
+                .bind(vec![CHECKPOINT_ONLY.name().to_owned()])
                 .fetch_one(&pool)
                 .await?;
         assert_ne!(run_id, second_run_id);
@@ -289,7 +245,7 @@ mod tests {
             "SELECT checkpoint_state, written FROM steda.set_task_checkpoint_state($1, $2, $3, $4, $5)",
         )
         .bind(&queue)
-        .bind(spawned.id())
+        .bind(spawned.task_id())
         .bind("immutable")
         .bind(json!({"value": 2}))
         .bind(second_run_id)
@@ -299,7 +255,7 @@ mod tests {
         assert_eq!(second.get::<Value, _>("checkpoint_state"), json!({"value": 1}));
 
         assert_eq!(
-            fetch_checkpoints(&pool, &queue, spawned.id()).await?,
+            fetch_checkpoints(&pool, &queue, spawned.task_id()).await?,
             vec![("immutable".to_owned(), json!({"value": 1}))]
         );
 

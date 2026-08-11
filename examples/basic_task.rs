@@ -3,7 +3,7 @@
 //! The example defines one `Task`, registers an in-process async handler, spawns a
 //! logical task, and awaits its typed result. It intentionally avoids retries and
 //! checkpoints so the basic relationship between `Task`, `Queue`, `Worker`, and
-//! `TaskHandle` stays visible.
+//! `SpawnedTask` and its typed result stay visible.
 
 /// Shared setup and finite-worker helpers.
 mod common;
@@ -34,14 +34,8 @@ struct RenderInvoiceOutput {
     total_cents: u64,
 }
 
-/// Durable task contract for rendering an invoice.
-struct RenderInvoice;
-
-impl Task for RenderInvoice {
-    const NAME: &'static str = "render-invoice";
-    type Input = RenderInvoiceInput;
-    type Output = RenderInvoiceOutput;
-}
+/// Task definition for rendering an invoice.
+const RENDER_INVOICE: Task<RenderInvoiceInput, RenderInvoiceOutput> = Task::new("render-invoice");
 
 /// Run the basic producer/worker example.
 #[tokio::main(flavor = "current_thread")]
@@ -50,10 +44,10 @@ async fn main() -> Result<()> {
     let queue = steda.queue("example-basic")?;
     queue.create().await?;
 
-    // Registration is a worker capability declaration; producers do not need this registry.
+    // Register the handler this worker can execute.
     let worker = queue
         .worker()
-        .task::<RenderInvoice>(async |input: RenderInvoiceInput, _ctx: TaskContext| {
+        .task(RENDER_INVOICE, async |input: RenderInvoiceInput, _ctx: TaskContext| {
             Ok(RenderInvoiceOutput {
                 invoice_number: input.invoice_number,
                 total_cents: input.subtotal_cents + input.tax_cents,
@@ -62,14 +56,16 @@ async fn main() -> Result<()> {
         .build()?;
     let worker = RunningWorker::start(worker);
 
-    // `spawn::<RenderInvoice>` preserves the task type in the returned handle, including result
-    // decoding.
+    // The task definition fixes both the accepted input and decoded result type.
     let task = queue
-        .spawn::<RenderInvoice>(RenderInvoiceInput {
-            invoice_number: common::unique_key("INV")?,
-            subtotal_cents: 12_500,
-            tax_cents: 2_625,
-        })
+        .spawn(
+            RENDER_INVOICE,
+            RenderInvoiceInput {
+                invoice_number: common::unique_key("INV")?,
+                subtotal_cents: 12_500,
+                tax_cents: 2_625,
+            },
+        )
         .await?;
 
     let invoice = task.result_with_timeout(Duration::from_secs(10)).await?;

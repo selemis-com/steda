@@ -15,89 +15,29 @@ mod tests {
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
         Error, Result, RetryStrategy, RunId, Sleep, Steda, Step, Task, TaskContext, TaskId,
-        TaskResultSnapshot,
+        TaskSnapshot,
     };
     use time::OffsetDateTime;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
-    #[derive(Clone, Copy, Debug)]
-    struct LateCheckpoint;
+    const LATE_CHECKPOINT: Step<Value> = Step::new("late");
 
-    impl Step for LateCheckpoint {
-        const NAME: &'static str = "late";
-        type Output = Value;
-    }
+    const DATABASE_WAIT: Sleep = Sleep::new("wait");
 
-    #[derive(Clone, Copy, Debug)]
-    struct DatabaseWait;
+    const CANCEL_BEFORE_START: Task<Value, Value> = Task::new("cancel-before-start");
 
-    impl Sleep for DatabaseWait {
-        const NAME: &'static str = "wait";
-    }
+    const CHECKPOINT_ONLY: Task<Value, Value> = Task::new("checkpoint-only");
 
-    #[derive(Clone, Copy, Debug)]
-    struct CancelBeforeStart;
+    const DATABASE_SLEEP: Task<Value, Value> = Task::new("database-sleep");
 
-    impl Task for CancelBeforeStart {
-        const NAME: &'static str = "cancel-before-start";
-        type Input = Value;
-        type Output = Value;
-    }
+    const DEADLINE: Task<Value, Value> = Task::new("deadline");
 
-    #[derive(Clone, Copy, Debug)]
-    struct CheckpointOnly;
+    const DEADLINE_FAILURE: Task<Value, Value> = Task::new("deadline-failure");
 
-    impl Task for CheckpointOnly {
-        const NAME: &'static str = "checkpoint-only";
-        type Input = Value;
-        type Output = Value;
-    }
+    const EXPIRED_BEFORE_START: Task<Value, Value> = Task::new("expired-before-start");
 
-    #[derive(Clone, Copy, Debug)]
-    struct DatabaseSleep;
-
-    impl Task for DatabaseSleep {
-        const NAME: &'static str = "database-sleep";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Deadline;
-
-    impl Task for Deadline {
-        const NAME: &'static str = "deadline";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct DeadlineFailure;
-
-    impl Task for DeadlineFailure {
-        const NAME: &'static str = "deadline-failure";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct ExpiredBeforeStart;
-
-    impl Task for ExpiredBeforeStart {
-        const NAME: &'static str = "expired-before-start";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct HangPastDuration;
-
-    impl Task for HangPastDuration {
-        const NAME: &'static str = "hang-past-duration";
-        type Input = Value;
-        type Output = Value;
-    }
+    const HANG_PAST_DURATION: Task<Value, Value> = Task::new("hang-past-duration");
 
     struct TaskRow {
         state: String,
@@ -139,18 +79,18 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<HangPastDuration>(async |_params: Value, _ctx| {
+            .task(HANG_PAST_DURATION, async |_params: Value, _ctx| {
                 std::future::pending::<Result<Value>>().await
             })
             .build()?;
 
         let spawned = app
-            .spawn::<HangPastDuration>(json!({}))
+            .spawn(HANG_PAST_DURATION, json!({}))
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
         app.delete().await?;
         Ok(())
@@ -164,16 +104,16 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<Deadline>(async |_params: Value, _ctx| Ok(json!({"too_late": true})))
+            .task(DEADLINE, async |_params: Value, _ctx| Ok(json!({"too_late": true})))
             .build()?;
 
         let spawned = app
-            .spawn::<Deadline>(json!({}))
+            .spawn(DEADLINE, json!({}))
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
         app.delete().await?;
         Ok(())
@@ -187,22 +127,22 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<DeadlineFailure>(async |_params: Value, _ctx| {
+            .task(DEADLINE_FAILURE, async |_params: Value, _ctx| {
                 Err::<Value, _>(Error::Other("boom".to_owned()))
             })
             .build()?;
 
         let spawned = app
-            .spawn::<DeadlineFailure>(json!({}))
+            .spawn(DEADLINE_FAILURE, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
-        let task = fetch_task(&pool, &queue, spawned.id()).await?;
+        let task = fetch_task(&pool, &queue, spawned.task_id()).await?;
         let run_id = task.last_attempt_run;
         let run_table = format!("runs_{queue}");
         let query = format!("SELECT state, failure_reason FROM steda.{run_table} WHERE id = $1");
@@ -222,23 +162,25 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<CheckpointOnly>(async |_params: Value, ctx: TaskContext| {
-                ctx.step(LateCheckpoint, async || Ok::<_, Error>(json!({"value": 1}))).await?;
+            .task(CHECKPOINT_ONLY, async |_params: Value, ctx: TaskContext| {
+                ctx.step(LATE_CHECKPOINT, async || Ok::<_, Error>(json!({"value": 1}))).await?;
                 Ok(json!({"done": true}))
             })
             .build()?;
 
         let spawned = app
-            .spawn::<CheckpointOnly>(json!({}))
+            .spawn(CHECKPOINT_ONLY, json!({}))
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
         let query = format!("SELECT count(*) FROM steda.checkpoints_{queue} WHERE task_id = $1");
-        let checkpoint_count: i64 =
-            sqlx::query_scalar(AssertSqlSafe(query)).bind(spawned.id()).fetch_one(&pool).await?;
+        let checkpoint_count: i64 = sqlx::query_scalar(AssertSqlSafe(query))
+            .bind(spawned.task_id())
+            .fetch_one(&pool)
+            .await?;
         assert_eq!(checkpoint_count, 0);
 
         app.delete().await?;
@@ -253,28 +195,28 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<DeadlineFailure>(async |_params: Value, _ctx| {
+            .task(DEADLINE_FAILURE, async |_params: Value, _ctx| {
                 Err::<Value, _>(Error::Other("boom".to_owned()))
             })
             .build()?;
 
         let spawned = app
-            .spawn::<DeadlineFailure>(json!({}))
+            .spawn(DEADLINE_FAILURE, json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::from_secs(3_600)))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        let before = fetch_task(&pool, &queue, spawned.id()).await?;
+        let before = fetch_task(&pool, &queue, spawned.task_id()).await?;
         assert_eq!(before.state, "failed");
 
         let now: OffsetDateTime =
             sqlx::query_scalar("SELECT steda.current_time()").fetch_one(&pool).await?;
         set_fake_now(&pool, now + time::Duration::hours(1)).await?;
 
-        assert!(app.retry_task(spawned.id()).await.is_err());
-        let after = fetch_task(&pool, &queue, spawned.id()).await?;
+        assert!(spawned.retry().await.is_err());
+        let after = fetch_task(&pool, &queue, spawned.task_id()).await?;
         assert_eq!(after.state, "failed");
         assert_eq!(after.attempts, before.attempts);
         assert_eq!(after.last_attempt_run, before.last_attempt_run);
@@ -293,19 +235,19 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<DatabaseSleep>(async |_params: Value, ctx: TaskContext| {
-                ctx.sleep_for(DatabaseWait, Duration::from_secs(30)).await?;
+            .task(DATABASE_SLEEP, async |_params: Value, ctx: TaskContext| {
+                ctx.sleep_for(DATABASE_WAIT, Duration::from_secs(30)).await?;
                 Ok(json!({"awake": true}))
             })
             .build()?;
 
         let spawned = app
-            .spawn::<DatabaseSleep>(json!({}))
+            .spawn(DATABASE_SLEEP, json!({}))
             .cancellation(steda::CancellationPolicy::new().max_duration(Duration::from_secs(10)))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
         app.delete().await?;
         Ok(())
@@ -318,7 +260,7 @@ mod tests {
         app.create().await?;
 
         let spawned = app
-            .spawn::<CancelBeforeStart>(json!({}))
+            .spawn(CANCEL_BEFORE_START, json!({}))
             .cancellation(steda::CancellationPolicy::new().max_delay(Duration::ZERO))
             .await?;
 
@@ -330,7 +272,7 @@ mod tests {
             .fetch_one(&pool);
         let (first, second) = tokio::join!(first, second);
         assert_eq!(first? + second?, 1);
-        assert_eq!(app.fetch_task_result(spawned.id()).await?, Some(TaskResultSnapshot::Cancelled));
+        assert_eq!(spawned.snapshot().await?, Some(TaskSnapshot::Cancelled));
 
         app.delete().await?;
         Ok(())
@@ -343,7 +285,7 @@ mod tests {
         app.create().await?;
 
         for _ in 0..3 {
-            app.spawn::<ExpiredBeforeStart>(json!({}))
+            app.spawn(EXPIRED_BEFORE_START, json!({}))
                 .cancellation(steda::CancellationPolicy::new().max_delay(Duration::ZERO))
                 .await?;
         }
@@ -362,7 +304,7 @@ mod tests {
                 .bind("max-delay-worker")
                 .bind(30_i32)
                 .bind(3_i32)
-                .bind(vec![ExpiredBeforeStart::NAME.to_owned()])
+                .bind(vec![EXPIRED_BEFORE_START.name().to_owned()])
                 .fetch_all(&pool)
                 .await?;
         assert!(claimed.is_empty());
@@ -379,8 +321,8 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<DatabaseSleep>(async |_params: Value, ctx: TaskContext| {
-                ctx.sleep_for(DatabaseWait, Duration::from_secs(30)).await?;
+            .task(DATABASE_SLEEP, async |_params: Value, ctx: TaskContext| {
+                ctx.sleep_for(DATABASE_WAIT, Duration::from_secs(30)).await?;
                 Ok(json!({"awake": true}))
             })
             .build()?;
@@ -389,10 +331,10 @@ mod tests {
             .map_err(|err| Error::InvalidOptions(err.to_string()))?;
         set_fake_now(&pool, base).await?;
 
-        let spawned = app.spawn::<DatabaseSleep>(json!({})).await?;
+        let spawned = app.spawn(DATABASE_SLEEP, json!({})).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
-        let run_id = fetch_task(&pool, &queue, spawned.id()).await?.last_attempt_run;
+        let run_id = fetch_task(&pool, &queue, spawned.task_id()).await?.last_attempt_run;
         let query = format!("SELECT available_at FROM steda.runs_{queue} WHERE id = $1");
         let available_at: OffsetDateTime =
             sqlx::query_scalar(AssertSqlSafe(query)).bind(run_id).fetch_one(&pool).await?;
@@ -401,8 +343,8 @@ mod tests {
         set_fake_now(&pool, base + time::Duration::seconds(31)).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(
-            app.fetch_task_result(spawned.id()).await?,
-            Some(TaskResultSnapshot::Completed { result: json!({"awake": true}) })
+            spawned.snapshot().await?,
+            Some(TaskSnapshot::Completed { result: json!({"awake": true}) })
         );
 
         app.delete().await?;

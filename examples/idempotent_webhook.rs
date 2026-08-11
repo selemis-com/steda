@@ -34,14 +34,8 @@ struct Fulfillment {
     accepted_payment: String,
 }
 
-/// Durable task contract for order fulfillment.
-struct FulfillOrder;
-
-impl Task for FulfillOrder {
-    const NAME: &'static str = "fulfill-order";
-    type Input = PaymentCaptured;
-    type Output = Fulfillment;
-}
+/// Task definition for order fulfillment.
+const FULFILL_ORDER: Task<PaymentCaptured, Fulfillment> = Task::new("fulfill-order");
 
 /// Run the idempotent webhook example.
 #[tokio::main(flavor = "current_thread")]
@@ -52,7 +46,7 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<FulfillOrder>(async |payment: PaymentCaptured, _ctx: TaskContext| {
+        .task(FULFILL_ORDER, async |payment: PaymentCaptured, _ctx: TaskContext| {
             println!(
                 "fulfilling {} after payment {} for {} cents",
                 payment.order_id, payment.payment_id, payment.amount_cents
@@ -72,12 +66,12 @@ async fn main() -> Result<()> {
 
     // The same key and same original request resolve to one logical task ID.
     let first =
-        queue.spawn::<FulfillOrder>(webhook.clone()).idempotency_key(&idempotency_key).await?;
-    let duplicate = queue.spawn::<FulfillOrder>(webhook).idempotency_key(&idempotency_key).await?;
+        queue.spawn(FULFILL_ORDER, webhook.clone()).idempotency_key(&idempotency_key).await?;
+    let duplicate = queue.spawn(FULFILL_ORDER, webhook).idempotency_key(&idempotency_key).await?;
 
     assert!(first.created());
     assert!(!duplicate.created());
-    assert_eq!(first.id(), duplicate.id());
+    assert_eq!(first.task_id(), duplicate.task_id());
 
     let fulfillment = first.result_with_timeout(Duration::from_secs(10)).await?;
     println!(

@@ -1,42 +1,77 @@
-//! Typed contracts for durable workflow identities.
+//! Typed values for durable workflow identities.
+
+use std::{fmt, marker::PhantomData};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-/// Compile-time contract for one durable checkpointed step.
+/// Stable identity and checkpointed value type for one durable workflow step.
 ///
-/// Implement this trait on a marker type local to the workflow. The marker couples a stable
-/// persisted step name to the value type Steda checkpoints for that step, so call sites pass a
-/// Rust identity rather than an arbitrary string.
+/// Define steps as constants shared by the workflow code that uses them:
 ///
-/// The value type is part of the contract:
-///
-/// ```compile_fail
-/// use steda::{Result, Step, TaskContext};
-///
-/// struct Count;
-///
-/// impl Step for Count {
-///     const NAME: &'static str = "count";
-///     type Output = u64;
-/// }
-///
-/// async fn wrong(ctx: &TaskContext) -> Result<String> {
-///     ctx.step(Count, async || Ok(String::from("not a u64"))).await
-/// }
 /// ```
-pub trait Step: Send + 'static {
-    /// Stable persisted name for this workflow step.
-    const NAME: &'static str;
-
-    /// Value checkpointed after this step succeeds.
-    type Output: Serialize + DeserializeOwned + Send + 'static;
+/// use steda::Step;
+///
+/// const COUNT: Step<u64> = Step::new("count");
+/// ```
+///
+/// The output type is part of the value, so a step cannot be used with a body that returns an
+/// unrelated type.
+pub struct Step<Output> {
+    /// Stable persisted step name.
+    name: &'static str,
+    /// Checkpointed Rust value type.
+    marker: PhantomData<fn() -> Output>,
 }
 
-/// Compile-time contract for one durable sleep point.
+impl<Output> Copy for Step<Output> {}
+
+impl<Output> Clone for Step<Output> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Output> Step<Output> {
+    /// Return the stable persisted step name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl<Output> Step<Output>
+where
+    Output: Serialize + DeserializeOwned + Send + 'static,
+{
+    /// Define a durable workflow step with a stable persisted name.
+    pub const fn new(name: &'static str) -> Self {
+        Self { name, marker: PhantomData }
+    }
+}
+
+impl<Output> fmt::Debug for Step<Output> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Step").field(&self.name).finish()
+    }
+}
+
+/// Stable identity for one durable sleep point.
 ///
-/// Sleep marker types occupy a distinct persisted namespace from [`Step`] checkpoints, so a sleep
-/// cannot alias result-bearing workflow state even when both contracts use the same logical name.
-pub trait Sleep: Send + 'static {
-    /// Stable persisted name for this durable sleep point.
-    const NAME: &'static str;
+/// Sleep values occupy a distinct persisted namespace from [`Step`] checkpoints, so a sleep
+/// cannot alias result-bearing workflow state even when both use the same logical name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Sleep {
+    /// Stable persisted sleep name.
+    name: &'static str,
+}
+
+impl Sleep {
+    /// Define a durable sleep point with a stable persisted name.
+    pub const fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    /// Return the stable persisted sleep name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
 }

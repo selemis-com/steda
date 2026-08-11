@@ -15,7 +15,7 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskResultSnapshot};
+    use steda::{Error, Result, Steda, Task, TaskSnapshot};
     use tokio::{
         sync::{Notify, oneshot},
         time::timeout,
@@ -23,23 +23,9 @@ mod tests {
 
     use super::common::unique_queue;
 
-    #[derive(Clone, Copy, Debug)]
-    struct DrainingTask;
+    const DRAINING_TASK: Task<Value, Value> = Task::new("draining-task");
 
-    impl Task for DrainingTask {
-        const NAME: &'static str = "draining-task";
-        type Input = Value;
-        type Output = Value;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Quick;
-
-    impl Task for Quick {
-        const NAME: &'static str = "quick";
-        type Input = Value;
-        type Output = Value;
-    }
+    const QUICK: Task<Value, Value> = Task::new("quick");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn worker_shutdown_returns_when_idle(pool: PgPool) -> Result<()> {
@@ -49,7 +35,7 @@ mod tests {
 
         let runtime = app
             .worker()
-            .task::<Quick>(async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
             .build()?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let worker = tokio::spawn(async move {
@@ -81,14 +67,14 @@ mod tests {
 
         let worker = app
             .worker()
-            .task::<Quick>(async |_params: Value, _ctx| Ok(json!({"ok": true})))
+            .task(QUICK, async |_params: Value, _ctx| Ok(json!({"ok": true})))
             .build()?;
-        let task = app.spawn::<Quick>(json!({})).await?;
+        let task = app.spawn(QUICK, json!({})).await?;
 
         worker.run_until(async {}).await?;
 
         assert_eq!(app.metrics().claimed_runs(), 0);
-        assert_eq!(app.fetch_task_result(task.id()).await?, Some(TaskResultSnapshot::Pending));
+        assert_eq!(task.snapshot().await?, Some(TaskSnapshot::Pending));
 
         app.delete().await?;
         Ok(())
@@ -105,7 +91,7 @@ mod tests {
         let completed = Arc::new(AtomicUsize::new(0));
         let runtime = app
             .worker()
-            .task::<DrainingTask>({
+            .task(DRAINING_TASK, {
                 let started = started.clone();
                 let release = release.clone();
                 let completed = completed.clone();
@@ -123,7 +109,7 @@ mod tests {
             })
             .build()?;
 
-        let spawned = app.spawn::<DrainingTask>(json!({})).await?;
+        let spawned = app.spawn(DRAINING_TASK, json!({})).await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let mut worker = tokio::spawn(async move {
             runtime

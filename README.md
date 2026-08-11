@@ -21,9 +21,9 @@ sleeps, cancellation state, and results so work can survive process restarts and
 
 The model is deliberately small:
 
-- a [`Task`](https://docs.rs/steda/latest/steda/trait.Task.html) defines a typed input/output contract;
+- a [`Task`](https://docs.rs/steda/latest/steda/struct.Task.html) defines a stable name and typed input/output pair;
 - queues persist logical tasks and their attempts;
-- workers declare which task types they can execute;
+- workers declare which task definitions they can execute;
 - checkpointed steps preserve successful work across retries;
 - durable sleeps suspend work without occupying a worker;
 - idempotency keys make repeated external delivery safe to submit.
@@ -71,13 +71,7 @@ struct ResizeImageOutput {
     resized_key: String,
 }
 
-struct ResizeImage;
-
-impl Task for ResizeImage {
-    const NAME: &'static str = "resize-image";
-    type Input = ResizeImageInput;
-    type Output = ResizeImageOutput;
-}
+const RESIZE_IMAGE: Task<ResizeImageInput, ResizeImageOutput> = Task::new("resize-image");
 ```
 
 Create a queue and register a handler:
@@ -89,7 +83,7 @@ queue.create().await?;
 let worker = queue
     .worker()
     .concurrency(8)
-    .task::<ResizeImage>(async |input: ResizeImageInput, _ctx: TaskContext| {
+    .task(RESIZE_IMAGE, async |input: ResizeImageInput, _ctx: TaskContext| {
         let resized_key = format!("resized/{}", input.object_key);
         Ok(ResizeImageOutput { resized_key })
     })
@@ -97,11 +91,11 @@ let worker = queue
 worker.run().await?;
 ```
 
-Producers use the same task marker:
+Producers use the same task definition:
 
 ```rust
 let task = queue
-    .spawn::<ResizeImage>(ResizeImageInput {
+    .spawn(RESIZE_IMAGE, ResizeImageInput {
         object_key: "uploads/photo.jpg".to_owned(),
         width: 1600,
     })
@@ -111,7 +105,7 @@ let output = task.result().await?;
 println!("{}", output.resized_key);
 ```
 
-`TaskHandle<T>` retains the task type, so result decoding remains typed. Producer and worker processes share only the task contract and PostgreSQL state; no runtime task registry is required.
+The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference that keeps the queue, task name, task ID, and Rust input/output types together across restarts. Producer and worker processes share the same `Task` constant and PostgreSQL state; no runtime task registry is required.
 
 ## Durable workflows
 
@@ -121,7 +115,7 @@ Queue-scoped idempotency keys make repeated external delivery safe to submit:
 
 ```rust
 let task = payments
-    .spawn::<FulfillOrder>(payment)
+    .spawn(FULFILL_ORDER, payment)
     .idempotency_key(format!("payment-captured:{payment_id}"))
     .await?;
 ```
@@ -138,7 +132,7 @@ use std::time::Duration;
 use steda::RetryStrategy;
 
 let task = queue
-    .spawn::<DeliverDocument>(input)
+    .spawn(DELIVER_DOCUMENT, input)
     .max_attempts(5)
     .retry_strategy(RetryStrategy::exponential(
         Duration::from_secs(1),
@@ -157,15 +151,10 @@ let task = queue
 ```rust
 use steda::Step;
 
-struct ReserveInventory;
-
-impl Step for ReserveInventory {
-    const NAME: &'static str = "reserve-inventory";
-    type Output = Reservation;
-}
+const RESERVE_INVENTORY: Step<Reservation> = Step::new("reserve-inventory");
 
 let reservation = ctx
-    .step(ReserveInventory, async || {
+    .step(RESERVE_INVENTORY, async || {
         inventory.reserve(&input.order_id).await
     })
     .await?;
@@ -183,13 +172,9 @@ A durable sleep persists its wake time and releases the worker claim:
 use std::time::Duration;
 use steda::Sleep;
 
-struct SettlementWindow;
+const SETTLEMENT_WINDOW: Sleep = Sleep::new("settlement-window");
 
-impl Sleep for SettlementWindow {
-    const NAME: &'static str = "settlement-window";
-}
-
-ctx.sleep_for(SettlementWindow, Duration::from_secs(30)).await?;
+ctx.sleep_for(SETTLEMENT_WINDOW, Duration::from_secs(30)).await?;
 ```
 
 When the wake time arrives, execution starts again from the handler entry point. Earlier

@@ -30,29 +30,15 @@ struct ReminderSent {
     attempt: u32,
 }
 
-/// Durable task contract for the delayed reminder.
-struct SendTrialReminder;
+/// Task definition for the delayed reminder.
+const SEND_TRIAL_REMINDER: Task<SendTrialReminderInput, ReminderSent> =
+    Task::new("send-trial-reminder");
 
-impl Task for SendTrialReminder {
-    const NAME: &'static str = "send-trial-reminder";
-    type Input = SendTrialReminderInput;
-    type Output = ReminderSent;
-}
+/// Trial-start checkpoint.
+const RECORD_TRIAL: Step<()> = Step::new("record-trial");
 
-/// Durable identity for recording the trial start.
-struct RecordTrial;
-
-impl Step for RecordTrial {
-    const NAME: &'static str = "record-trial";
-    type Output = ();
-}
-
-/// Durable identity for the reminder delay.
-struct ReminderDelay;
-
-impl Sleep for ReminderDelay {
-    const NAME: &'static str = "reminder-delay";
-}
+/// Reminder delay.
+const REMINDER_DELAY: Sleep = Sleep::new("reminder-delay");
 
 /// Run the durable-sleep example.
 #[tokio::main(flavor = "current_thread")]
@@ -63,15 +49,15 @@ async fn main() -> Result<()> {
 
     let worker = queue
         .worker()
-        .task::<SendTrialReminder>(async |input: SendTrialReminderInput, ctx: TaskContext| {
-            ctx.step(RecordTrial, async || {
+        .task(SEND_TRIAL_REMINDER, async |input: SendTrialReminderInput, ctx: TaskContext| {
+            ctx.step(RECORD_TRIAL, async || {
                 println!("recorded trial start for {}", input.account_id);
                 Ok(())
             })
             .await?;
 
             println!("waiting durably before reminding {}", input.account_id);
-            ctx.sleep_for(ReminderDelay, Duration::from_secs(2)).await?;
+            ctx.sleep_for(REMINDER_DELAY, Duration::from_secs(2)).await?;
 
             println!("sending reminder for {}", input.account_id);
             Ok(ReminderSent { account_id: input.account_id, attempt: ctx.attempt() })
@@ -80,9 +66,10 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn::<SendTrialReminder>(SendTrialReminderInput {
-            account_id: common::unique_key("account")?,
-        })
+        .spawn(
+            SEND_TRIAL_REMINDER,
+            SendTrialReminderInput { account_id: common::unique_key("account")? },
+        )
         .await?;
 
     let sent = task.result_with_timeout(Duration::from_secs(10)).await?;
