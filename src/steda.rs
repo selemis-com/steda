@@ -97,13 +97,15 @@ impl Steda {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(|row| QueueCleanup {
-                name: row.get("name"),
-                tasks_deleted: row.get("tasks_deleted"),
+        rows.into_iter()
+            .map(|row| {
+                let tasks_deleted: i32 = row.get("tasks_deleted");
+                let tasks_deleted = u32::try_from(tasks_deleted).map_err(|_| {
+                    Error::Other("PostgreSQL returned a negative cleanup count".to_owned())
+                })?;
+                Ok(QueueCleanup { name: row.get("name"), tasks_deleted })
             })
-            .collect())
+            .collect()
     }
 
     /// Return the underlying `PostgreSQL` pool.

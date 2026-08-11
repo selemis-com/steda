@@ -69,7 +69,7 @@
 //! separate **run** identified by [`RunId`] and a one-based attempt number. Automatic retries,
 //! manual retries, durable sleeps, and worker loss do not change the logical task identity.
 //!
-//! [`TaskContext::id`] returns the logical task ID, while [`TaskContext::run_id`] and
+//! [`TaskContext::task_id`] returns the logical task ID, while [`TaskContext::run_id`] and
 //! [`TaskContext::attempt`] describe the currently executing attempt.
 //!
 //! The default attempt budget is five. The default [`RetryStrategy`] is exponential backoff

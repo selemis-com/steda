@@ -90,7 +90,7 @@ mod tests {
         let spawned = app
             .spawn::<CachedStep>(json!({}))
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(step_executions.load(Ordering::SeqCst), 1);
@@ -170,7 +170,7 @@ mod tests {
         let spawned = app
             .spawn::<CheckpointOnly>(json!({}))
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         let run_id: RunId =
             sqlx::query_scalar("SELECT run_id FROM steda.claim_tasks($1, $2, $3, $4, $5) LIMIT 1")

@@ -156,10 +156,9 @@ mod tests {
         let queue = unique_queue("policy");
         let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
 
-        app.create_with_policy(QueuePolicyOptions {
-            cleanup_ttl: Some(Duration::from_secs(12_345)),
-            cleanup_limit: Some(77),
-        })
+        app.create_with_policy(
+            QueuePolicyOptions::new().cleanup_ttl(Duration::from_secs(12_345)).cleanup_limit(77),
+        )
         .await?;
 
         let policy = app
@@ -170,10 +169,9 @@ mod tests {
         assert_eq!(policy.cleanup_ttl, Duration::from_secs(12_345));
         assert_eq!(policy.cleanup_limit, 77);
 
-        app.set_policy(QueuePolicyOptions {
-            cleanup_ttl: Some(Duration::from_secs(4_321)),
-            cleanup_limit: Some(12),
-        })
+        app.set_policy(
+            QueuePolicyOptions::new().cleanup_ttl(Duration::from_secs(4_321)).cleanup_limit(12),
+        )
         .await?;
         let updated = app
             .policy()
@@ -193,9 +191,7 @@ mod tests {
         let steda = Steda::from_pool(pool.clone());
         let app = steda.queue(queue.clone())?;
 
-        let result = app
-            .create_with_policy(QueuePolicyOptions { cleanup_ttl: None, cleanup_limit: Some(0) })
-            .await;
+        let result = app.create_with_policy(QueuePolicyOptions::new().cleanup_limit(0)).await;
         assert!(result.is_err());
         assert!(!steda.queues().await?.contains(&queue));
         assert_eq!(queue_storage_relation_count(&pool, &queue).await?, 0);

@@ -130,7 +130,7 @@ mod tests {
 
         let spawned = app
             .spawn::<HangPastDuration>(json!({}))
-            .cancellation(steda::CancellationPolicy { max_duration: Some(0), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -153,7 +153,7 @@ mod tests {
 
         let spawned = app
             .spawn::<Deadline>(json!({}))
-            .cancellation(steda::CancellationPolicy { max_duration: Some(0), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -180,7 +180,7 @@ mod tests {
             .spawn::<DeadlineFailure>(json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
-            .cancellation(steda::CancellationPolicy { max_duration: Some(0), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -214,7 +214,7 @@ mod tests {
 
         let spawned = app
             .spawn::<CheckpointOnly>(json!({}))
-            .cancellation(steda::CancellationPolicy { max_duration: Some(0), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -246,7 +246,7 @@ mod tests {
             .spawn::<DeadlineFailure>(json!({}))
             .max_attempts(1)
             .retry_strategy(RetryStrategy::none())
-            .cancellation(steda::CancellationPolicy { max_duration: Some(3_600), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::from_secs(3_600)))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -285,7 +285,7 @@ mod tests {
 
         let spawned = app
             .spawn::<DatabaseSleep>(json!({}))
-            .cancellation(steda::CancellationPolicy { max_duration: Some(10), max_delay: None })
+            .cancellation(steda::CancellationPolicy::new().max_duration(Duration::from_secs(10)))
             .await?;
 
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -303,7 +303,7 @@ mod tests {
 
         let spawned = app
             .spawn::<CancelBeforeStart>(json!({}))
-            .cancellation(steda::CancellationPolicy { max_duration: None, max_delay: Some(0) })
+            .cancellation(steda::CancellationPolicy::new().max_delay(Duration::ZERO))
             .await?;
 
         let first = sqlx::query_scalar::<_, i32>("SELECT steda.cancel_expired_tasks($1, 1)")
@@ -328,7 +328,7 @@ mod tests {
 
         for _ in 0..3 {
             app.spawn::<ExpiredBeforeStart>(json!({}))
-                .cancellation(steda::CancellationPolicy { max_duration: None, max_delay: Some(0) })
+                .cancellation(steda::CancellationPolicy::new().max_delay(Duration::ZERO))
                 .await?;
         }
 

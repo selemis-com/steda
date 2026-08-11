@@ -27,7 +27,7 @@ struct ReminderSent {
     /// Account receiving the reminder.
     account_id: String,
     /// Attempt number observed after resumption.
-    attempt: i32,
+    attempt: u32,
 }
 
 /// Durable task contract for the delayed reminder.

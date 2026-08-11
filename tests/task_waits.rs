@@ -9,6 +9,8 @@ mod worker_support;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use serde_json::{Value, json};
     use sqlx::PgPool;
     use steda::{
@@ -92,7 +94,7 @@ mod tests {
         let parent = parent_queue
             .spawn::<Parent>(child.id())
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;

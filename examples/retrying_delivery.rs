@@ -31,7 +31,7 @@ struct DeliveryReceipt {
     /// Remote delivery destination.
     destination: String,
     /// Attempt number that finally succeeded.
-    delivered_on_attempt: i32,
+    delivered_on_attempt: u32,
 }
 
 /// Durable task contract for remote document delivery.
@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
             destination: "archive@example.invalid".to_owned(),
         })
         .max_attempts(3)
-        .retry_strategy(RetryStrategy::fixed(0.25))
+        .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;
 
     let receipt = task.result_with_timeout(Duration::from_secs(10)).await?;

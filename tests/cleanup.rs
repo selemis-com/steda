@@ -62,11 +62,8 @@ mod tests {
             .fetch_one(&mut *retry_tx)
             .await?;
 
-        app.set_policy(QueuePolicyOptions {
-            cleanup_ttl: Some(Duration::ZERO),
-            cleanup_limit: Some(100),
-        })
-        .await?;
+        app.set_policy(QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(100))
+            .await?;
         let deleted = timeout(Duration::from_secs(2), app.cleanup())
             .await
             .map_err(|_| Error::Timeout("cleanup blocked on task being retried".to_owned()))??;
@@ -113,11 +110,8 @@ mod tests {
             Some(TaskResultSnapshot::Completed { .. })
         ));
 
-        app.set_policy(QueuePolicyOptions {
-            cleanup_ttl: Some(Duration::ZERO),
-            cleanup_limit: Some(100),
-        })
-        .await?;
+        app.set_policy(QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(100))
+            .await?;
         let tasks_deleted = app.cleanup().await?;
         assert_eq!(tasks_deleted, 1);
         assert!(app.fetch_task_result(spawned.id()).await?.is_none());
@@ -145,16 +139,14 @@ mod tests {
         let first = steda.queue(first_name.clone())?;
         let second = steda.queue(second_name.clone())?;
         first
-            .create_with_policy(QueuePolicyOptions {
-                cleanup_ttl: Some(Duration::ZERO),
-                cleanup_limit: Some(1),
-            })
+            .create_with_policy(
+                QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(1),
+            )
             .await?;
         second
-            .create_with_policy(QueuePolicyOptions {
-                cleanup_ttl: Some(Duration::ZERO),
-                cleanup_limit: Some(100),
-            })
+            .create_with_policy(
+                QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(100),
+            )
             .await?;
 
         let first_worker = first

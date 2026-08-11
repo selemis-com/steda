@@ -12,8 +12,8 @@ use crate::{
     metrics::QueueMetrics,
     task::{Spawn, Task, TaskHandle, validate_task_name},
     types::{
-        CancellationPolicy, Json, QueuePolicy, QueuePolicyOptions, RetryStrategy, RunId,
-        SpawnConfig, SpawnResult, TaskId, TaskResultSnapshot,
+        Json, QueuePolicy, QueuePolicyOptions, RetryStrategy, RunId, SpawnConfig, SpawnResult,
+        TaskId, TaskResultSnapshot,
     },
     worker::WorkerBuilder,
 };
@@ -187,15 +187,19 @@ impl Queue {
     pub async fn create_with_policy(&self, policy: QueuePolicyOptions) -> Result<()> {
         let queue = &self.name;
         let cleanup_ttl_seconds = policy.cleanup_ttl.map(duration_seconds).transpose()?;
+        let cleanup_limit = policy
+            .cleanup_limit
+            .map(|value| database_positive_i32(value, "cleanup_limit"))
+            .transpose()?;
         let mut transaction = self.pool.begin().await?;
 
         sqlx::query("SELECT steda.create_queue($1)").bind(queue).execute(&mut *transaction).await?;
 
-        if cleanup_ttl_seconds.is_some() || policy.cleanup_limit.is_some() {
+        if cleanup_ttl_seconds.is_some() || cleanup_limit.is_some() {
             sqlx::query("SELECT steda.set_queue_policy($1, $2, $3)")
                 .bind(queue)
                 .bind(cleanup_ttl_seconds)
-                .bind(policy.cleanup_limit)
+                .bind(cleanup_limit)
                 .execute(&mut *transaction)
                 .await?;
         }
@@ -212,11 +216,15 @@ impl Queue {
     pub async fn set_policy(&self, options: QueuePolicyOptions) -> Result<()> {
         let queue = &self.name;
         let cleanup_ttl_seconds = options.cleanup_ttl.map(duration_seconds).transpose()?;
+        let cleanup_limit = options
+            .cleanup_limit
+            .map(|value| database_positive_i32(value, "cleanup_limit"))
+            .transpose()?;
 
         sqlx::query("SELECT steda.set_queue_policy($1, $2, $3)")
             .bind(queue)
             .bind(cleanup_ttl_seconds)
-            .bind(options.cleanup_limit)
+            .bind(cleanup_limit)
             .execute(&self.pool)
             .await?;
 
@@ -311,13 +319,14 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error if cleanup fails.
-    pub async fn cleanup(&self) -> Result<i32> {
-        let tasks_deleted = sqlx::query_scalar("SELECT steda.cleanup_tasks($1)")
+    pub async fn cleanup(&self) -> Result<u32> {
+        let tasks_deleted: i32 = sqlx::query_scalar("SELECT steda.cleanup_tasks($1)")
             .bind(&self.name)
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(tasks_deleted)
+        u32::try_from(tasks_deleted)
+            .map_err(|_| Error::Other("PostgreSQL returned a negative cleanup count".to_owned()))
     }
 }
 
@@ -343,8 +352,8 @@ pub(crate) fn validate_queue_name(queue_name: &str) -> Result<String> {
 ///
 /// # Errors
 ///
-/// Returns an error when retry, cancellation, attempt, or idempotency options are invalid, or an
-/// option cannot be serialized to JSON.
+/// Returns an error when retry, cancellation, attempt, or idempotency options cannot be
+/// represented by Steda's database boundary.
 pub(crate) fn normalize_spawn_options(options: SpawnConfig) -> Result<Map<String, Value>> {
     validate_spawn_options(&options)?;
     let mut payload = Map::new();
@@ -352,15 +361,30 @@ pub(crate) fn normalize_spawn_options(options: SpawnConfig) -> Result<Map<String
         payload.insert("headers".to_owned(), Value::Object(headers));
     }
     if let Some(max_attempts) = options.max_attempts {
-        payload.insert("max_attempts".to_owned(), json!(max_attempts));
+        payload.insert(
+            "max_attempts".to_owned(),
+            json!(database_positive_i32(max_attempts, "max_attempts")?),
+        );
     }
     if let Some(retry_strategy) = options.retry_strategy {
-        payload.insert("retry_strategy".to_owned(), serde_json::to_value(retry_strategy)?);
+        payload.insert("retry_strategy".to_owned(), retry_strategy_json(retry_strategy)?);
     }
     if let Some(cancellation) = options.cancellation {
-        let value = serde_json::to_value(cancellation)?;
-        if value.as_object().is_some_and(|obj| !obj.is_empty()) {
-            payload.insert("cancellation".to_owned(), value);
+        let mut value = Map::new();
+        if let Some(max_duration) = cancellation.max_duration {
+            value.insert(
+                "max_duration".to_owned(),
+                json!(duration_seconds_i64(max_duration, "cancellation max_duration")?),
+            );
+        }
+        if let Some(max_delay) = cancellation.max_delay {
+            value.insert(
+                "max_delay".to_owned(),
+                json!(duration_seconds_i64(max_delay, "cancellation max_delay")?),
+            );
+        }
+        if !value.is_empty() {
+            payload.insert("cancellation".to_owned(), Value::Object(value));
         }
     }
     if let Some(idempotency_key) = options.idempotency_key {
@@ -371,14 +395,11 @@ pub(crate) fn normalize_spawn_options(options: SpawnConfig) -> Result<Map<String
 
 /// Validate spawn options before they cross the database boundary.
 fn validate_spawn_options(options: &SpawnConfig) -> Result<()> {
-    if matches!(options.max_attempts, Some(value) if value < 1) {
+    if matches!(options.max_attempts, Some(0)) {
         return Err(Error::InvalidOptions("max_attempts must be at least 1".to_owned()));
     }
     if let Some(strategy) = options.retry_strategy {
         validate_retry_strategy(strategy)?;
-    }
-    if let Some(cancellation) = options.cancellation {
-        validate_cancellation_policy(cancellation)?;
     }
     if let Some(key) = options.idempotency_key.as_deref() {
         if key.trim().is_empty() {
@@ -393,37 +414,21 @@ fn validate_spawn_options(options: &SpawnConfig) -> Result<()> {
     Ok(())
 }
 
-/// Validate retry strategy numeric values before crossing the database boundary.
-///
-/// Variant shape is guaranteed by [`RetryStrategy`] itself; `PostgreSQL` remains
-/// authoritative for the persisted retry policy and delay calculation.
+/// Validate retry-strategy values that remain numeric at the Rust boundary.
 fn validate_retry_strategy(strategy: RetryStrategy) -> Result<()> {
-    let invalid_seconds =
-        |value: f64| !value.is_finite() || !(0.0..=MAX_DATABASE_DELAY_SECONDS).contains(&value);
-
     match strategy {
-        RetryStrategy::Fixed { base_seconds } => {
-            if invalid_seconds(base_seconds) {
-                return Err(Error::InvalidOptions(format!(
-                    "retry base_seconds must be finite and between 0 and {MAX_DATABASE_DELAY_SECONDS} seconds"
-                )));
-            }
+        RetryStrategy::Fixed { delay } => {
+            validate_retry_delay(delay, "retry delay")?;
         }
-        RetryStrategy::Exponential { base_seconds, factor, max_seconds } => {
-            if invalid_seconds(base_seconds) {
-                return Err(Error::InvalidOptions(format!(
-                    "retry base_seconds must be finite and between 0 and {MAX_DATABASE_DELAY_SECONDS} seconds"
-                )));
-            }
+        RetryStrategy::Exponential { initial_delay, factor, max_delay } => {
+            validate_retry_delay(initial_delay, "retry initial delay")?;
             if !factor.is_finite() || factor <= 0.0 {
                 return Err(Error::InvalidOptions(
                     "retry factor must be finite and greater than zero".to_owned(),
                 ));
             }
-            if max_seconds.is_some_and(invalid_seconds) {
-                return Err(Error::InvalidOptions(format!(
-                    "retry max_seconds must be finite and between 0 and {MAX_DATABASE_DELAY_SECONDS} seconds"
-                )));
+            if let Some(max_delay) = max_delay {
+                validate_retry_delay(max_delay, "retry maximum delay")?;
             }
         }
         RetryStrategy::None => {}
@@ -432,19 +437,57 @@ fn validate_retry_strategy(strategy: RetryStrategy) -> Result<()> {
     Ok(())
 }
 
-/// Validate cancellation deadline values.
-fn validate_cancellation_policy(policy: CancellationPolicy) -> Result<()> {
-    if policy.max_duration.is_some_and(|value| value < 0) {
-        return Err(Error::InvalidOptions(
-            "cancellation max_duration must be non-negative".to_owned(),
-        ));
-    }
-    if policy.max_delay.is_some_and(|value| value < 0) {
-        return Err(Error::InvalidOptions(
-            "cancellation max_delay must be non-negative".to_owned(),
-        ));
+/// Convert one typed retry strategy to the canonical persisted JSON shape.
+fn retry_strategy_json(strategy: RetryStrategy) -> Result<Value> {
+    validate_retry_strategy(strategy)?;
+    Ok(match strategy {
+        RetryStrategy::Fixed { delay } => json!({
+            "kind": "fixed",
+            "base_seconds": delay.as_secs_f64(),
+        }),
+        RetryStrategy::Exponential { initial_delay, factor, max_delay } => {
+            let mut value = Map::from_iter([
+                ("kind".to_owned(), Value::String("exponential".to_owned())),
+                ("base_seconds".to_owned(), json!(initial_delay.as_secs_f64())),
+                ("factor".to_owned(), json!(factor)),
+            ]);
+            if let Some(max_delay) = max_delay {
+                value.insert("max_seconds".to_owned(), json!(max_delay.as_secs_f64()));
+            }
+            Value::Object(value)
+        }
+        RetryStrategy::None => json!({ "kind": "none" }),
+    })
+}
+
+/// Ensure a retry delay can be represented by the database retry functions.
+fn validate_retry_delay(delay: Duration, label: &str) -> Result<()> {
+    if delay.as_secs_f64() > MAX_DATABASE_DELAY_SECONDS {
+        return Err(Error::InvalidOptions(format!(
+            "{label} must be at most {MAX_DATABASE_DELAY_SECONDS} seconds"
+        )));
     }
     Ok(())
+}
+
+/// Convert a positive unsigned Rust count to Steda's signed `PostgreSQL` integer boundary.
+fn database_positive_i32(value: u32, label: &str) -> Result<i32> {
+    if value == 0 {
+        return Err(Error::InvalidOptions(format!("{label} must be at least 1")));
+    }
+    i32::try_from(value)
+        .map_err(|_| Error::InvalidOptions(format!("{label} must be at most {}", i32::MAX)))
+}
+
+/// Round a duration up to whole seconds for cancellation JSON stored as a `PostgreSQL` bigint.
+fn duration_seconds_i64(duration: Duration, label: &str) -> Result<i64> {
+    let seconds = duration
+        .as_secs()
+        .checked_add(u64::from(duration.subsec_nanos() > 0))
+        .ok_or_else(|| Error::InvalidOptions(format!("{label} is too large to represent")))?;
+    i64::try_from(seconds).map_err(|_| {
+        Error::InvalidOptions(format!("{label} must round to at most {} seconds", i64::MAX))
+    })
 }
 
 /// Decodes a queue policy row returned by Postgres.
@@ -453,7 +496,10 @@ fn queue_policy_from_row(row: &PgRow) -> Result<QueuePolicy> {
     let cleanup_ttl_seconds = u64::try_from(cleanup_ttl_seconds)
         .map_err(|_| Error::Other("PostgreSQL returned a negative queue cleanup TTL".to_owned()))?;
     let cleanup_limit: i32 = row.get("cleanup_limit");
-    if cleanup_limit < 1 {
+    let cleanup_limit = u32::try_from(cleanup_limit).map_err(|_| {
+        Error::Other("PostgreSQL returned an invalid queue cleanup limit".to_owned())
+    })?;
+    if cleanup_limit == 0 {
         return Err(Error::Other("PostgreSQL returned an invalid queue cleanup limit".to_owned()));
     }
 

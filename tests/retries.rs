@@ -162,8 +162,12 @@ mod tests {
 
         let task = app
             .spawn::<RetryProbe>(json!({}))
-            .max_attempts(i32::MAX)
-            .retry_strategy(RetryStrategy::exponential(30.0, 2.0, Some(3600.0)))
+            .max_attempts(2_147_483_647)
+            .retry_strategy(RetryStrategy::exponential(
+                Duration::from_secs(30),
+                2.0,
+                Some(Duration::from_secs(3_600)),
+            ))
             .await
             .expect("capped retry growth should not invalidate a large attempt budget");
 
@@ -197,7 +201,7 @@ mod tests {
         let flaky = app
             .spawn::<Flaky>(json!({}))
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
@@ -294,7 +298,7 @@ mod tests {
         let spawned = app
             .spawn::<ClaimedOnly>(json!({}))
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         let failed_run: RunId =
             sqlx::query_scalar("SELECT run_id FROM steda.claim_tasks($1, $2, $3, $4, $5) LIMIT 1")

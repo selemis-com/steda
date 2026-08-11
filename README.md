@@ -134,12 +134,17 @@ request returns `Error::IdempotencyConflict`.
 Tasks can use bounded retry policies with configurable backoff:
 
 ```rust
+use std::time::Duration;
 use steda::RetryStrategy;
 
 let task = queue
     .spawn::<DeliverDocument>(input)
     .max_attempts(5)
-    .retry_strategy(RetryStrategy::exponential(1.0, 2.0, Some(60.0)))
+    .retry_strategy(RetryStrategy::exponential(
+        Duration::from_secs(1),
+        2.0,
+        Some(Duration::from_secs(60)),
+    ))
     .await?;
 ```
 

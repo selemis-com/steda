@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
             amount_cents: 14_950,
         })
         .max_attempts(2)
-        .retry_strategy(RetryStrategy::fixed(0.25))
+        .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;
 
     let shipment = task.result_with_timeout(Duration::from_secs(10)).await?;

@@ -305,8 +305,10 @@ mod tests {
             })
             .build()?;
 
-        let spawned =
-            app.spawn::<ExpireOnce>(json!({})).retry_strategy(RetryStrategy::fixed(0.0)).await?;
+        let spawned = app
+            .spawn::<ExpireOnce>(json!({}))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
+            .await?;
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let worker = tokio::spawn(async move {
             runtime
@@ -426,7 +428,7 @@ mod tests {
 
         let spawned = app
             .spawn::<CancelWhileSaturated>(json!({}))
-            .cancellation(CancellationPolicy { max_duration: Some(1), max_delay: None })
+            .cancellation(CancellationPolicy::new().max_duration(Duration::from_secs(1)))
             .await?;
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

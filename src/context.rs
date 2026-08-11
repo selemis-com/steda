@@ -137,7 +137,7 @@ impl TaskContext {
     }
 
     /// Return the attempt number.
-    pub fn attempt(&self) -> i32 {
+    pub fn attempt(&self) -> u32 {
         self.inner.task.attempt
     }
 

@@ -63,7 +63,7 @@ impl ExecutionRequest {
     }
 
     /// Return the current attempt number.
-    pub fn attempt(&self) -> i32 {
+    pub fn attempt(&self) -> u32 {
         self.context.attempt()
     }
 

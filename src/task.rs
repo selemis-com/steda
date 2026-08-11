@@ -107,7 +107,7 @@ impl<'a, T: Task> Spawn<'a, T> {
     }
 
     /// Set the total attempt budget, including the first execution.
-    pub const fn max_attempts(mut self, max_attempts: i32) -> Self {
+    pub const fn max_attempts(mut self, max_attempts: u32) -> Self {
         self.options.max_attempts = Some(max_attempts);
         self
     }

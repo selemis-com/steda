@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
             prompt: "Summarize the attached repository changes".to_owned(),
         })
         .max_attempts(2)
-        .retry_strategy(RetryStrategy::fixed(0.0))
+        .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
         .await?;
 
     let output = task.result_with_timeout(Duration::from_secs(10)).await?;

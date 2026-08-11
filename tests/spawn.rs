@@ -9,9 +9,12 @@ mod worker_support;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
 
     use serde_json::{Value, json};
@@ -195,8 +198,10 @@ mod tests {
             })
             .build()?;
 
-        let defaulted =
-            app.spawn::<SpawnDefaults>(json!({})).retry_strategy(RetryStrategy::fixed(0.0)).await?;
+        let defaulted = app
+            .spawn::<SpawnDefaults>(json!({}))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
+            .await?;
         for _ in 0..5 {
             run_worker_for_claims(&worker, app.metrics(), 1).await?;
         }
@@ -209,7 +214,7 @@ mod tests {
         let explicit = app
             .spawn::<SpawnDefaults>(json!({}))
             .max_attempts(3)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
         for _ in 0..3 {
             run_worker_for_claims(&worker, app.metrics(), 1).await?;

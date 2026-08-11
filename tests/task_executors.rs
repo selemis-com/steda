@@ -15,6 +15,7 @@ mod tests {
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         },
+        time::Duration,
     };
 
     use sqlx::PgPool;
@@ -81,7 +82,7 @@ mod tests {
     /// Records each attempt as if a fresh execution environment were provisioned for it.
     #[derive(Clone, Debug)]
     struct ProvisionedExecutor {
-        attempts: Arc<Mutex<Vec<(i32, RunId)>>>,
+        attempts: Arc<Mutex<Vec<(u32, RunId)>>>,
     }
 
     impl TaskExecutor<Provisioned> for ProvisionedExecutor {
@@ -121,7 +122,7 @@ mod tests {
         let task = queue
             .spawn::<Provisioned>(21)
             .max_attempts(2)
-            .retry_strategy(RetryStrategy::fixed(0.0))
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
             .await?;
 
         run_worker_for_claims(&worker, queue.metrics(), 2).await?;

@@ -189,10 +189,14 @@ fn claimed_task_from_row(row: &PgRow) -> Result<ClaimedTask> {
         }
     };
 
+    let attempt: i32 = row.get("attempt");
+    let attempt = u32::try_from(attempt)
+        .map_err(|_| Error::Other("PostgreSQL returned a negative task attempt".to_owned()))?;
+
     Ok(ClaimedTask {
         run_id: row.get("run_id"),
         id: row.get("id"),
-        attempt: row.get("attempt"),
+        attempt,
         name: row.get("name"),
         params: row.get("params"),
         headers,
