@@ -47,7 +47,7 @@ steda::migrate(steda.pool()).await?;
 
 For larger deployments, migrations will usually run as a separate release step.
 
-Applications that already own an `sqlx::PgPool` can use `Steda::from_pool(pool.clone())`. Use `Steda::builder(pool)` when Tower execution middleware is also needed.
+Applications that already own an `sqlx::PgPool` can use `Steda::from_pool(pool.clone())`. Use `Steda::builder(pool)` when [Tower](https://github.com/tower-rs/tower) execution middleware is also needed.
 
 Steda does not select a SQLx TLS backend. Applications using `Steda::connect` against a TLS-only
 PostgreSQL service should enable the appropriate SQLx TLS feature in their dependency graph.
@@ -220,7 +220,7 @@ least-privilege role split automatically.
 
 ## Tower middleware
 
-Task handler invocation can be wrapped at the root with ordinary Tower layers through
+Task handler invocation can be wrapped at the root with ordinary [Tower](https://github.com/tower-rs/tower) layers through
 `Steda::builder(pool)`. Middleware receives task metadata and `TaskContext`; PostgreSQL remains
 authoritative for claims, leases, retries, cancellation, and terminal state.
 
