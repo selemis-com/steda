@@ -13,7 +13,7 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskResultSnapshot};
+    use steda::{Error, Result, Steda, Task, TaskId, TaskResultSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
@@ -67,7 +67,7 @@ mod tests {
         let app = Steda::from_pool(pool).queue(queue)?;
         app.create().await?;
 
-        assert_eq!(app.fetch_task_result(uuid::Uuid::now_v7()).await?, None);
+        assert_eq!(app.fetch_task_result(TaskId::from_uuid(uuid::Uuid::now_v7())).await?, None);
 
         app.delete().await?;
         Ok(())
@@ -79,7 +79,7 @@ mod tests {
         let app = Steda::from_pool(pool).queue(queue)?;
         app.create().await?;
 
-        let task_id = uuid::Uuid::now_v7();
+        let task_id = TaskId::from_uuid(uuid::Uuid::now_v7());
         let error = app
             .await_task_result(task_id, Some(Duration::ZERO))
             .await

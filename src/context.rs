@@ -117,7 +117,7 @@ impl TaskContext {
     }
 
     /// Return the task id.
-    pub fn id(&self) -> TaskId {
+    pub fn task_id(&self) -> TaskId {
         self.inner.task.id
     }
 
@@ -127,7 +127,7 @@ impl TaskContext {
     }
 
     /// Return the task name.
-    pub fn name(&self) -> &str {
+    pub fn task_name(&self) -> &str {
         &self.inner.task.name
     }
 

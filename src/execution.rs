@@ -44,7 +44,7 @@ impl ExecutionRequest {
 
     /// Return the logical task identifier.
     pub fn task_id(&self) -> TaskId {
-        self.context.id()
+        self.context.task_id()
     }
 
     /// Return the claimed run identifier.
@@ -54,7 +54,7 @@ impl ExecutionRequest {
 
     /// Return the registered task name.
     pub fn task_name(&self) -> &str {
-        self.context.name()
+        self.context.task_name()
     }
 
     /// Return the queue containing this task.
