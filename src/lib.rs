@@ -235,6 +235,7 @@
 //! - `basic_task`: typed producer/worker flow and typed results;
 //! - `idempotent_webhook`: duplicate external delivery at submission time;
 //! - `retrying_delivery`: bounded transient retries;
+//! - `multistep_workflow`: a task composed from several typed durable steps;
 //! - `checkpointed_order`: checkpoint replay across a failed attempt;
 //! - `durable_delay`: suspension without occupying a worker claim;
 //! - `cross_queue_workflow`: checkpointed parent/child work across queues;

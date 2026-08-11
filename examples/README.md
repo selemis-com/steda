@@ -48,6 +48,17 @@ three-attempt fixed-delay retry policy.
 Use retry policies for failures expected to improve when tried again. A terminal application error
 should normally be returned without artificially extending its retry budget.
 
+## `multistep_workflow`
+
+```sh
+cargo run --example multistep_workflow
+```
+
+Shows the normal shape of a task composed from several typed durable steps. Inventory reservation,
+payment capture, and shipment creation each produce a typed value that feeds the final task result.
+There is no simulated failure in this example; `checkpointed_order` demonstrates replay behavior
+separately.
+
 ## `checkpointed_order`
 
 ```sh

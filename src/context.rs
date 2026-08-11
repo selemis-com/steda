@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fmt,
     sync::{Arc, Mutex, PoisonError},
-    time::Duration as StdDuration,
+    time::Duration,
 };
 
 use futures_util::future::BoxFuture;
@@ -193,7 +193,7 @@ impl TaskContext {
     /// Returns [`Error::Suspended`] when the current attempt has been durably suspended,
     /// [`Error::Cancelled`] if a durable cancellation deadline wins, or another error if the
     /// duration cannot be represented or checkpoint/scheduling state cannot be persisted.
-    pub async fn sleep_for(&self, sleep: Sleep, duration: StdDuration) -> Result<()> {
+    pub async fn sleep_for(&self, sleep: Sleep, duration: Duration) -> Result<()> {
         let duration = SignedDuration::try_from(duration)
             .map_err(|err| Error::InvalidOptions(err.to_string()))?;
         let now = self.database_time().await?;
@@ -264,7 +264,7 @@ impl TaskContext {
     async fn await_task_ref<Input, Output>(
         &self,
         task: TaskRef<Input, Output>,
-        timeout: Option<StdDuration>,
+        timeout: Option<Duration>,
     ) -> Result<Output>
     where
         Input: Serialize + DeserializeOwned + Send + 'static,
@@ -419,7 +419,7 @@ pub struct TaskWait<'a, Input, Output> {
     /// Durable typed target reference.
     task: TaskRef<Input, Output>,
     /// Optional timeout for this execution attempt's polling wait.
-    timeout: Option<StdDuration>,
+    timeout: Option<Duration>,
 }
 
 impl<Input, Output> fmt::Debug for TaskWait<'_, Input, Output> {
@@ -438,7 +438,7 @@ impl<'a, Input, Output> TaskWait<'a, Input, Output> {
     }
 
     /// Limit how long this execution attempt polls for the target result.
-    pub const fn timeout(mut self, timeout: StdDuration) -> Self {
+    pub const fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }

@@ -162,6 +162,8 @@ let reservation = ctx
 
 If the task runs again, Steda replays the stored result rather than executing the step body again.
 
+See [`multistep_workflow`](examples/multistep_workflow.rs) for a complete task composed from several typed steps.
+
 A checkpoint makes the Steda step replayable; it cannot make an external side effect exactly once. Use the external system's idempotency or fencing mechanism when that property is required.
 
 ### Durable sleeps
@@ -202,6 +204,7 @@ The repository contains standalone programs that use only Steda's public API. Po
 | [`basic_task`](examples/basic_task.rs) | Typed producer/worker flow and typed results |
 | [`idempotent_webhook`](examples/idempotent_webhook.rs) | Deduplicating repeated webhook delivery |
 | [`retrying_delivery`](examples/retrying_delivery.rs) | Bounded retries after transient failures |
+| [`multistep_workflow`](examples/multistep_workflow.rs) | A task composed from several typed durable steps |
 | [`checkpointed_order`](examples/checkpointed_order.rs) | Multi-step work replayed across a retry |
 | [`durable_delay`](examples/durable_delay.rs) | Suspending without holding a worker claim |
 | [`cross_queue_workflow`](examples/cross_queue_workflow.rs) | Parent/child work across separate queues |
