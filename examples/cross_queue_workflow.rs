@@ -1,18 +1,29 @@
 //! Coordinate a parent task with child work in another queue.
 //!
-//! The parent checkpoints child creation, waits for the child's terminal result,
-//! and checkpoints that wait. Separate queues are intentional: Steda rejects
-//! same-queue waits because a finite worker pool could otherwise deadlock with every
-//! slot occupied by parents waiting for children that need those same slots.
+//! The parent checkpoints a typed `TaskRef` to the child, then deliberately fails.
+//! On retry, the checkpoint replays that same child reference, so the parent can await
+//! the exact task it already created instead of spawning another one. The child spawn
+//! also uses an idempotency key to cover the smaller crash window between creating the
+//! child and committing the parent checkpoint.
+//!
+//! Separate queues are intentional: Steda rejects same-queue waits because a finite
+//! worker pool could otherwise deadlock with every slot occupied by parents waiting
+//! for children that need those same slots.
 
 /// Shared setup and finite-worker helpers.
 mod common;
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use common::RunningWorker;
 use serde::{Deserialize, Serialize};
-use steda::{Queue, Result, Step, Task, TaskContext, TaskRef};
+use steda::{Error, Queue, Result, RetryStrategy, Step, Task, TaskContext, TaskRef};
 
 /// Input for the child email task.
 #[derive(Debug, Deserialize, Serialize)]
@@ -82,7 +93,12 @@ async fn complete_order(
         })
         .await?;
 
-    // The typed child output is checkpointed under the durable child task reference.
+    // Simulate a transient parent failure after the child reference is durable.
+    if ctx.attempt() == 1 {
+        return Err(Error::Other("order worker restarted after spawning receipt".to_owned()));
+    }
+
+    // The retry recovered the same typed child reference from the checkpoint above.
     let receipt = ctx.await_task(&child).timeout(Duration::from_secs(10)).await?;
 
     Ok(CompleteOrderOutput { order_id: input.order_id, receipt_message_id: receipt.message_id })
@@ -97,11 +113,17 @@ async fn main() -> Result<()> {
     orders.create().await?;
     email.create().await?;
 
+    let receipt_runs = Arc::new(AtomicUsize::new(0));
+    let worker_receipt_runs = Arc::clone(&receipt_runs);
     let email_worker = email
         .worker()
-        .task(EMAIL_RECEIPT, async |input: EmailReceiptInput, _ctx: TaskContext| {
-            println!("sending receipt for {} to {}", input.order_id, input.address);
-            Ok(EmailReceiptOutput { message_id: format!("msg:{}", input.order_id) })
+        .task(EMAIL_RECEIPT, move |input: EmailReceiptInput, _ctx: TaskContext| {
+            let worker_receipt_runs = Arc::clone(&worker_receipt_runs);
+            async move {
+                worker_receipt_runs.fetch_add(1, Ordering::SeqCst);
+                println!("sending receipt for {} to {}", input.order_id, input.address);
+                Ok(EmailReceiptOutput { message_id: format!("msg:{}", input.order_id) })
+            }
         })
         .build()?;
     let email_worker = RunningWorker::start(email_worker);
@@ -119,9 +141,12 @@ async fn main() -> Result<()> {
             COMPLETE_ORDER,
             CompleteOrderInput { order_id, email: "buyer@example.invalid".to_owned() },
         )
+        .max_attempts(2)
+        .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;
 
     let completed = task.result_with_timeout(Duration::from_secs(15)).await?;
+    assert_eq!(receipt_runs.load(Ordering::SeqCst), 1);
     println!("{} completed after receipt {}", completed.order_id, completed.receipt_message_id);
 
     orders_worker.stop().await?;

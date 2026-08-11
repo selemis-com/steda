@@ -88,9 +88,10 @@ beginning and replays its checkpoints.
 cargo run --example cross_queue_workflow
 ```
 
-Models an order task that spawns an email receipt in another queue and waits for its result. The
-child spawn and result wait are checkpointed, so retrying the parent does not create another child
-or repeat a completed wait.
+Shows why `TaskRef` exists. An order task spawns an email receipt in another queue and checkpoints
+the child's typed reference. The parent then fails deliberately. On retry, Steda replays the same
+`TaskRef` and waits for that exact child instead of spawning another one. The spawn also uses an
+idempotency key to cover a crash after child creation but before the parent checkpoint commits.
 
 Steda intentionally rejects same-queue task waits because they can deadlock a finite worker pool.
 Use a separate queue when one task synchronously depends on another task's result.
