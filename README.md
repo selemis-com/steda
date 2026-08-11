@@ -34,23 +34,11 @@ Steda requires PostgreSQL 18+. See [MSRV](#msrv) for supported Rust versions.
 
 ```sh
 cargo add steda
-cargo add serde --features derive
-cargo add tokio --features macros,rt-multi-thread
 ```
 
-Create the Steda schema before producers or workers begin using it:
+Download [`sql/steda.sql`](sql/steda.sql) and apply it to your PostgreSQL database before starting producers or workers.
 
-```rust
-let steda = steda::Steda::connect(&database_url).await?;
-steda::migrate(steda.pool()).await?;
-```
-
-For larger deployments, migrations will usually run as a separate release step.
-
-Applications that already own an `sqlx::PgPool` can use `Steda::from_pool(pool.clone())`. Use `Steda::builder(pool)` when [Tower](https://github.com/tower-rs/tower) execution middleware is also needed.
-
-Steda does not select a SQLx TLS backend. Applications using `Steda::connect` against a TLS-only
-PostgreSQL service should enable the appropriate SQLx TLS feature in their dependency graph.
+When upgrading Steda, apply the `steda.sql` file from the new release again.
 
 ## Quick start
 
