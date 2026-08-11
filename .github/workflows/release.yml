@@ -1,0 +1,225 @@
+name: release
+
+permissions: {}
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_WARNINGS: deny
+  RUST_BACKTRACE: full
+
+concurrency:
+  group: release-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.package.outputs.tag }}
+      version: ${{ steps.package.outputs.version }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Bind release to tag commit
+        id: source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          head_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "${TAG}^{commit}")"
+
+          if [[ "$head_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout resolved to $head_sha; expected event commit $EXPECTED_SHA."
+            exit 1
+          fi
+
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Tag $TAG resolves to $tag_sha; expected event commit $EXPECTED_SHA."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$EXPECTED_SHA" refs/remotes/origin/master; then
+            echo "::error::Release commit $EXPECTED_SHA is not reachable from origin/master."
+            exit 1
+          fi
+
+          printf 'sha=%s\n' "$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+
+      - name: Validate package version and contents
+        id: package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="$(
+            cargo metadata \
+              --locked \
+              --no-deps \
+              --format-version 1 |
+              jq -er '
+                [
+                  .packages[]
+                  | select(.name == "steda")
+                  | .version
+                ]
+                | unique
+                | if length == 1 then .[0] else empty end
+              '
+          )"
+
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG does not match Cargo package version $version."
+            exit 1
+          fi
+
+          cargo package \
+            --package steda \
+            --locked
+
+          {
+            printf 'tag=%s\n' "$TAG"
+            printf 'version=%s\n' "$version"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-24.04
+    needs: prepare
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Verify remote tag still targets release commit
+        env:
+          EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          object_type="$(jq -r '.object.type' <<< "$object")"
+          tag_sha="$(jq -r '.object.sha' <<< "$object")"
+
+          while [[ "$object_type" == "tag" ]]; do
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha")"
+            object_type="$(jq -r '.object.type' <<< "$object")"
+            tag_sha="$(jq -r '.object.sha' <<< "$object")"
+          done
+
+          if [[ "$object_type" != "commit" || "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Remote tag $TAG resolves to $object_type ${tag_sha:-nothing}; expected commit $EXPECTED_SHA."
+            exit 1
+          fi
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+
+      - name: Stage publishable package
+        run: |
+          set -euo pipefail
+          cargo package \
+            --package steda \
+            --no-verify \
+            --locked
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish package
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          cargo publish \
+            --package steda \
+            --no-verify \
+            --locked
+
+  github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      - prepare
+      - publish
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Verify remote tag still targets release commit
+        env:
+          EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          object_type="$(jq -r '.object.type' <<< "$object")"
+          tag_sha="$(jq -r '.object.sha' <<< "$object")"
+
+          while [[ "$object_type" == "tag" ]]; do
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha")"
+            object_type="$(jq -r '.object.type' <<< "$object")"
+            tag_sha="$(jq -r '.object.sha' <<< "$object")"
+          done
+
+          if [[ "$object_type" != "commit" || "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Remote tag $TAG resolves to $object_type ${tag_sha:-nothing}; expected commit $EXPECTED_SHA."
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          gh release create "$TAG" \
+            --verify-tag \
+            --generate-notes \
+            --title "Steda $TAG"

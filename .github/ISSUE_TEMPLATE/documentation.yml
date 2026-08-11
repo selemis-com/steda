@@ -1,0 +1,15 @@
+name: Documentation
+description: Suggest a change to our documentation
+labels: ["documentation", "needs triage"]
+body:
+  - type: textarea
+    attributes:
+      label: Describe the change
+      description: |
+        Please describe the documentation you want to change or add.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Add any other context for the documentation change, such as examples or references.

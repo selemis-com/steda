@@ -1,0 +1,187 @@
+[package]
+name = "steda"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "PostgreSQL-backed durable task execution for Rust"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/selemis-com/steda"
+homepage = "https://github.com/selemis-com/steda"
+documentation = "https://docs.rs/steda"
+keywords = ["tasks", "workflow", "postgres", "queue", "durable"]
+categories = ["asynchronous", "database"]
+
+[lints.rust]
+closure_returning_async_block = "warn"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+missing_unsafe_on_extern = "warn"
+non_ascii_idents = "warn"
+redundant_imports = "warn"
+rust_2018_idioms = { level = "deny", priority = -1 }
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unnameable_types = "warn"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+unused_must_use = "deny"
+unused_qualifications = "warn"
+variant_size_differences = "warn"
+
+# These are Rust lints we want to enable from time to time but do not want to
+# strictly enforce. We can enable them in the future if we want to.
+# let_underscore_drop = "warn"
+# unused_results = "warn"
+
+[lints.rustdoc]
+all = "warn"
+
+[lints.clippy]
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+borrow_as_ptr = "warn"
+branches_sharing_code = "warn"
+cargo_common_metadata = "warn"
+clear_with_drain = "warn"
+cloned_instead_of_copied = "warn"
+collection_is_never_read = "warn"
+dbg_macro = "warn"
+derive_partial_eq_without_eq = "warn"
+doc_link_with_quotes = "warn"
+doc_markdown = "warn"
+enum_glob_use = "warn"
+equatable_if_let = "warn"
+explicit_deref_methods = "warn"
+explicit_into_iter_loop = "warn"
+explicit_iter_loop = "warn"
+flat_map_option = "warn"
+fn_params_excessive_bools = "warn"
+future_not_send = "warn"
+if_not_else = "warn"
+if_then_some_else_none = "warn"
+implicit_clone = "warn"
+implicit_hasher = "warn"
+imprecise_flops = "warn"
+iter_on_empty_collections = "warn"
+iter_on_single_items = "warn"
+iter_with_drain = "warn"
+iter_without_into_iter = "warn"
+large_futures = "warn"
+large_stack_frames = "warn"
+manual_assert = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+manual_string_new = "warn"
+match_same_arms = "warn"
+missing_const_for_fn = "warn"
+missing_docs_in_private_items = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+mutex_integer = "warn"
+naive_bytecount = "warn"
+needless_bitwise_bool = "warn"
+needless_continue = "warn"
+needless_for_each = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_pass_by_value = "warn"
+needless_type_cast = "warn"
+option_as_ref_cloned = "warn"
+option_if_let_else = "warn"
+or_fun_call = "warn"
+path_buf_push_overwrite = "warn"
+pub_without_shorthand = "warn"
+read_zero_byte_vec = "warn"
+redundant_clone = "warn"
+redundant_closure_for_method_calls = "warn"
+redundant_else = "warn"
+redundant_test_prefix = "warn"
+redundant_type_annotations = "warn"
+ref_as_ptr = "warn"
+ref_binding_to_reference = "warn"
+ref_option = "warn"
+ref_option_ref = "warn"
+ref_patterns = "warn"
+same_name_method = "warn"
+semicolon_inside_block = "warn"
+significant_drop_tightening = "warn"
+single_char_pattern = "warn"
+str_to_string = "warn"
+string_lit_as_bytes = "warn"
+string_lit_chars_any = "warn"
+struct_excessive_bools = "warn"
+suboptimal_flops = "warn"
+suspicious_operation_groupings = "warn"
+tests_outside_test_module = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+transmute_undefined_repr = "warn"
+trivial_regex = "warn"
+tuple_array_conversions = "warn"
+type_repetition_in_bounds = "warn"
+undocumented_unsafe_blocks = "warn"
+uninhabited_references = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_self_imports = "warn"
+unnecessary_struct_initialization = "warn"
+unnested_or_patterns = "warn"
+unreadable_literal = "warn"
+unseparated_literal_suffix = "warn"
+unused_peekable = "warn"
+unused_result_ok = "warn"
+unused_rounding = "warn"
+use_debug = "warn"
+use_self = "warn"
+used_underscore_binding = "warn"
+used_underscore_items = "warn"
+useless_let_if_seq = "warn"
+verbose_bit_mask = "warn"
+verbose_file_reads = "warn"
+volatile_composites = "warn"
+while_float = "warn"
+wildcard_dependencies = "warn"
+wildcard_imports = "warn"
+with_capacity_zero = "warn"
+zero_sized_map_values = "warn"
+
+# These are Clippy lints we want to enable from time to time but do not want to
+# strictly enforce. We can enable them in the future if we want to.
+# absolute_paths = "warn"
+# as_conversions = "warn"
+# redundant_pub_crate = "warn"
+# unused_async = "warn"
+# unused_async_trait_impl = "warn"
+# unwrap_used = "warn"
+# wildcard_enum_match_arm = "warn"
+
+[dependencies]
+# Vendor
+futures-util = { version = "0.3.32", default-features = false, features = [
+    "std",
+] }
+log = "0.4.33"
+serde_json = "1.0.151"
+serde = "1.0.229"
+sqlx = { version = "0.9.0", default-features = false, features = [
+  "macros",
+  "migrate",
+  "postgres",
+  "runtime-tokio",
+  "uuid",
+  "json",
+  "time"
+] }
+thiserror = "2.0.19"
+tower-layer = "0.3.3"
+tower-service = "0.3.3"
+time = { version = "0.3.47", features = ["serde"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+uuid = { version = "1.24.0", features = ["serde", "v7"] }
+
+[dev-dependencies]
+# Vendor
+proptest = "1.11.0"
+serde = { version = "1.0.229", features = ["derive"] }

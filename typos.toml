@@ -1,0 +1,9 @@
+[files]
+extend-exclude = [
+    ".git",
+    "target",
+    "migrations",
+    "Cargo.toml",
+    "Cargo.lock",
+    "THIRD_PARTY_NOTICES.md"
+]
