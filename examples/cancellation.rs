@@ -68,9 +68,7 @@ async fn main() -> Result<()> {
         Err(Error::Cancelled) => println!("deadline-limited task cancelled automatically"),
         Err(error) => return Err(error),
         Ok(()) => {
-            return Err(Error::Other(
-                "deadline-limited task unexpectedly completed".to_owned(),
-            ));
+            return Err(Error::Other("deadline-limited task unexpectedly completed".to_owned()));
         }
     }
 
