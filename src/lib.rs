@@ -167,6 +167,8 @@
 //! Explicit [`TaskHandle::cancel`] and deadline cancellation are durable. A stale attempt cannot
 //! later complete a cancelled task.
 //!
+//! See the runnable `cancellation` example for both paths.
+//!
 //! # Operating Steda
 //!
 //! ## Schema and queue lifecycle
@@ -235,6 +237,7 @@
 //! - `basic_task`: typed producer/worker flow and typed results;
 //! - `idempotent_webhook`: duplicate external delivery at submission time;
 //! - `retrying_delivery`: bounded transient retries;
+//! - `cancellation`: explicit and deadline-driven cancellation;
 //! - `multistep_workflow`: a task composed from several typed durable steps;
 //! - `checkpointed_order`: checkpoint replay across a failed attempt;
 //! - `durable_delay`: suspension without occupying a worker claim;

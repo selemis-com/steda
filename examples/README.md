@@ -48,6 +48,17 @@ three-attempt fixed-delay retry policy.
 Use retry policies for failures expected to improve when tried again. A terminal application error
 should normally be returned without artificially extending its retry budget.
 
+## `cancellation`
+
+```sh
+cargo run --example cancellation
+```
+
+Shows the two normal cancellation paths for running work. One task is cancelled explicitly through
+its typed spawned-task handle after the handler starts. Another receives a durable `max_duration` policy
+and is cancelled automatically when that execution budget expires. Both resolve as
+`Error::Cancelled`, and stale handler completion cannot revive the task.
+
 ## `multistep_workflow`
 
 ```sh
