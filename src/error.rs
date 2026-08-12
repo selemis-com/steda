@@ -10,14 +10,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Errors returned by the queue handle, worker, and task context.
 #[derive(Error, Debug)]
 pub enum Error {
-    /// Migration failed.
-    #[error("Steda PostgreSQL migration error: {source}")]
-    Migrate {
-        /// Underlying migration failure.
-        #[source]
-        source: sqlx::migrate::MigrateError,
-    },
-
     /// Error returned by `SQLx` while talking to Postgres.
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),

@@ -5,15 +5,15 @@ in order, but each can be run independently.
 
 ## Prerequisites
 
-Set `DATABASE_URL` to a PostgreSQL database that the current user can migrate and use:
+Set `DATABASE_URL` to a PostgreSQL database that the current user can use:
 
 ```sh
 export DATABASE_URL=postgres://postgres:postgres@localhost/steda
 ```
 
-Every example runs `steda::migrate` and creates its own `example-*` queue. This keeps the examples
-self-contained. Production deployments will usually run migrations separately before starting
-producers and workers.
+Every example applies the bundled `sql/steda.sql` schema and creates its own `example-*` queue.
+Production deployments apply the matching release's `steda.sql` before starting producers and
+workers.
 
 ## `basic_task`
 

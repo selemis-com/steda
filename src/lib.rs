@@ -12,8 +12,7 @@
 //!
 //! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
 //! database before producers or workers start. Reapply the new release's `steda.sql` when
-//! upgrading. [`migrate`] is available when an application prefers to apply the bundled schema
-//! programmatically.
+//! upgrading.
 //!
 //! Steda has no default crate features. Enable `tls-rustls` or `tls-native-tls` when
 //! [`Steda::connect`] needs TLS support.
@@ -200,7 +199,6 @@
 //!
 //! Apply the `sql/steda.sql` file from the Steda release before code that depends on that schema
 //! begins spawning or claiming work. Apply the new release's file again when upgrading.
-//! Applications that prefer programmatic schema management can use [`migrate`].
 //!
 //! [`Steda::queue`] creates a lightweight handle only. [`Queue::create`] creates its durable
 //! queue-specific `PostgreSQL` storage and is idempotent for a healthy existing queue. Repeated
@@ -308,7 +306,6 @@ pub mod middleware {
 }
 
 pub use context::{TaskContext, TaskWait};
-pub use db::migrate;
 pub use error::{Error, Result};
 pub use queue::Queue;
 pub use steda::{Steda, StedaBuilder};

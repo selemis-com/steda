@@ -167,7 +167,6 @@ serde_json = "1.0.151"
 serde = { version = "1.0.229", features = ["derive"] }
 sqlx = { version = "0.9.0", default-features = false, features = [
   "macros",
-  "migrate",
   "postgres",
   "runtime-tokio",
   "uuid",
@@ -184,6 +183,7 @@ uuid = { version = "1.24.0", features = ["serde", "v7"] }
 [dev-dependencies]
 # Vendor
 proptest = "1.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["migrate"] }
 
 [features]
 default = []

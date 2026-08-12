@@ -1,7 +1,7 @@
 //! Shared setup for the runnable examples.
 //!
-//! Production applications normally own migration and process supervision separately; these
-//! helpers intentionally keep each example self-contained and finite.
+//! Production applications normally own schema installation and process supervision separately;
+//! these helpers intentionally keep each example self-contained and finite.
 
 use std::{
     env, process,
@@ -11,12 +11,12 @@ use std::{
 use steda::{Error, Result, Steda, Worker};
 use tokio::{sync::oneshot, task::JoinHandle};
 
-/// Connect to `PostgreSQL` and apply Steda migrations for an example run.
+/// Connect to `PostgreSQL` and apply the bundled Steda schema for an example run.
 ///
 /// # Errors
 ///
 /// Returns an error when `DATABASE_URL` is absent, `PostgreSQL` cannot be reached,
-/// or the Steda migrations fail.
+/// or the bundled Steda schema cannot be applied.
 pub(super) async fn connect() -> Result<Steda> {
     let database_url = env::var("DATABASE_URL").map_err(|_| {
         Error::Other(
@@ -25,7 +25,7 @@ pub(super) async fn connect() -> Result<Steda> {
         )
     })?;
     let steda = Steda::connect(&database_url).await?;
-    steda::migrate(steda.pool()).await?;
+    sqlx::raw_sql(include_str!("../../sql/steda.sql")).execute(steda.pool()).await?;
     Ok(steda)
 }
 

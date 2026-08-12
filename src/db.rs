@@ -224,24 +224,6 @@ fn claimed_task_from_row(row: &PgRow) -> Result<ClaimedTask> {
     })
 }
 
-/// Apply Steda's bundled `PostgreSQL` schema migrations to `pool`.
-///
-/// Call this before producers or workers depend on a newer Steda schema. Small applications may
-/// run migrations during startup; larger deployments commonly invoke this once from a dedicated
-/// release/migration job before rolling out application processes.
-///
-/// # Errors
-///
-/// Returns an error if a migration cannot be applied.
-pub async fn migrate(pool: &PgPool) -> Result<()> {
-    sqlx::migrate!("./sql/migrations")
-        .run(pool)
-        .await
-        .map_err(|source| Error::Migrate { source })?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
