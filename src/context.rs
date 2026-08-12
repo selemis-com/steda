@@ -21,8 +21,8 @@ use crate::{
     workflow::{Sleep, Step},
 };
 
-/// Maximum user-defined durable workflow identity length in UTF-8 bytes.
-const MAX_WORKFLOW_NAME_BYTES: usize = 1024;
+/// Maximum persisted durable workflow identity length in UTF-8 bytes.
+const MAX_WORKFLOW_STORAGE_NAME_BYTES: usize = 1024;
 /// Internal namespace for typed result-bearing steps.
 const STEP_PREFIX: &str = "$step:";
 /// Internal namespace for durable sleeps.
@@ -400,11 +400,16 @@ fn workflow_storage_name(prefix: &str, name: &str) -> Result<String> {
     if name.trim().is_empty() {
         return Err(Error::InvalidOptions("workflow identity must not be empty".to_owned()));
     }
-    if name.len() > MAX_WORKFLOW_NAME_BYTES {
+
+    let maximum_name_bytes = MAX_WORKFLOW_STORAGE_NAME_BYTES
+        .checked_sub(prefix.len())
+        .expect("workflow namespace prefix must fit the PostgreSQL checkpoint name limit");
+    if name.len() > maximum_name_bytes {
         return Err(Error::InvalidOptions(format!(
-            "workflow identity must be at most {MAX_WORKFLOW_NAME_BYTES} bytes"
+            "workflow identity must be at most {maximum_name_bytes} bytes"
         )));
     }
+
     Ok(format!("{prefix}{name}"))
 }
 
@@ -454,5 +459,31 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move { self.context.await_task_ref(self.task, self.timeout).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SLEEP_PREFIX, STEP_PREFIX, workflow_storage_name};
+
+    #[test]
+    fn workflow_identity_limit_includes_internal_namespace() {
+        let maximum_step_name = "x".repeat(1024 - STEP_PREFIX.len());
+        assert_eq!(
+            workflow_storage_name(STEP_PREFIX, &maximum_step_name)
+                .expect("maximum step name should fit")
+                .len(),
+            1024
+        );
+        assert!(workflow_storage_name(STEP_PREFIX, &(maximum_step_name + "x")).is_err());
+
+        let maximum_sleep_name = "x".repeat(1024 - SLEEP_PREFIX.len());
+        assert_eq!(
+            workflow_storage_name(SLEEP_PREFIX, &maximum_sleep_name)
+                .expect("maximum sleep name should fit")
+                .len(),
+            1024
+        );
+        assert!(workflow_storage_name(SLEEP_PREFIX, &(maximum_sleep_name + "x")).is_err());
     }
 }
