@@ -1,6 +1,8 @@
 # Contributing Guide
 
-Steda is developed and maintained by Selemis B.V. Contributions from the community are welcome.
+Steda is developed and maintained by Selemis B.V.
+
+Contributions from the community are welcome.
 
 ## Before contributing
 
