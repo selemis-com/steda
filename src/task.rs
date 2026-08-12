@@ -4,8 +4,10 @@ use std::{fmt, marker::PhantomData, time::Duration};
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+use sqlx::{Postgres, Transaction};
 
 use crate::{
+    RunId,
     db::await_task_result_snapshot,
     error::{Error, Result},
     queue::{Queue, validate_queue_name},
@@ -224,7 +226,7 @@ where
     /// transaction.
     pub async fn submit(
         self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        transaction: &mut Transaction<'_, Postgres>,
     ) -> Result<SpawnedTask<Input, Output>> {
         self.queue.spawn_typed_on(self.task, self.input, self.options, transaction).await
     }
@@ -485,10 +487,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ///
     /// Returns an error if the task reference no longer matches the persisted task or the database
     /// cancellation fails.
-    pub async fn cancel_in(
-        &self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    ) -> Result<()> {
+    pub async fn cancel_in(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<()> {
         let connection = &mut **transaction;
         self.queue
             .ensure_task_ref_on(self.task_ref.task_name(), self.task_id(), &mut *connection)
@@ -501,7 +500,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     /// # Errors
     ///
     /// Returns an error if the task is missing, is not failed, or the database retry fails.
-    pub async fn retry(&self) -> Result<crate::RunId> {
+    pub async fn retry(&self) -> Result<RunId> {
         self.queue.ensure_task_ref(self.task_ref.task_name(), self.task_id()).await?;
         self.queue.retry_task(self.task_id()).await
     }
@@ -515,10 +514,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ///
     /// Returns an error if the task reference no longer matches the persisted task, the task is
     /// missing or not failed, or the database retry fails.
-    pub async fn retry_in(
-        &self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    ) -> Result<crate::RunId> {
+    pub async fn retry_in(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<RunId> {
         let connection = &mut **transaction;
         self.queue
             .ensure_task_ref_on(self.task_ref.task_name(), self.task_id(), &mut *connection)
@@ -649,10 +645,7 @@ impl<Input, Output> SpawnedTask<Input, Output> {
     /// # Errors
     ///
     /// Returns an error if the database cancellation fails.
-    pub async fn cancel_in(
-        &self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    ) -> Result<()> {
+    pub async fn cancel_in(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<()> {
         self.handle.cancel_in(transaction).await
     }
 
@@ -661,7 +654,7 @@ impl<Input, Output> SpawnedTask<Input, Output> {
     /// # Errors
     ///
     /// Returns an error if retrying the task fails.
-    pub async fn retry(&self) -> Result<crate::RunId> {
+    pub async fn retry(&self) -> Result<RunId> {
         self.handle.retry().await
     }
 
@@ -670,10 +663,7 @@ impl<Input, Output> SpawnedTask<Input, Output> {
     /// # Errors
     ///
     /// Returns an error if retrying the task fails.
-    pub async fn retry_in(
-        &self,
-        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    ) -> Result<crate::RunId> {
+    pub async fn retry_in(&self, transaction: &mut Transaction<'_, Postgres>) -> Result<RunId> {
         self.handle.retry_in(transaction).await
     }
 

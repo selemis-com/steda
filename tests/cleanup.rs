@@ -15,6 +15,7 @@ mod tests {
     use sqlx::{AssertSqlSafe, PgPool};
     use steda::{Error, QueuePolicyOptions, Result, Steda, Step, Task, TaskContext, TaskSnapshot};
     use tokio::time::timeout;
+    use uuid::Uuid;
 
     use super::{
         common::{install_fake_clock, unique_queue},
@@ -47,7 +48,7 @@ mod tests {
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         let mut retry_tx = pool.begin().await?;
-        let retry_run: uuid::Uuid = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
+        let retry_run: Uuid = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
             .bind(&queue)
             .bind(spawned.task_id())
             .fetch_one(&mut *retry_tx)
@@ -218,7 +219,7 @@ mod tests {
             .execute(&mut *connection)
             .await?;
         let run_query = format!("SELECT last_attempt_run FROM steda.{tasks_table} WHERE id = $1");
-        let run_id: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(run_query))
+        let run_id: Uuid = sqlx::query_scalar(AssertSqlSafe(run_query))
             .bind(spawned.task_id())
             .fetch_one(&mut *connection)
             .await?;

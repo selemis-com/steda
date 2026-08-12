@@ -1,6 +1,6 @@
 //! Background task worker.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use futures_util::{FutureExt, future::BoxFuture};
 use log::{error, info};
@@ -34,8 +34,8 @@ pub(crate) struct RegisteredTask {
     pub executor: ErasedTaskExecutor,
 }
 
-impl std::fmt::Debug for RegisteredTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RegisteredTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RegisteredTask").field("executor", &"<task executor>").finish()
     }
 }

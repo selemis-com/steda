@@ -10,6 +10,7 @@ mod tests {
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool};
     use steda::{Error, QueuePolicyOptions, Result, Steda, Task};
+    use uuid::Uuid;
 
     use super::common::unique_queue;
 
@@ -207,7 +208,7 @@ mod tests {
         );
         assert!(
             sqlx::query(AssertSqlSafe(duplicate_attempt))
-                .bind(uuid::Uuid::now_v7())
+                .bind(Uuid::now_v7())
                 .bind(spawned.task_id())
                 .execute(&pool)
                 .await
@@ -219,7 +220,7 @@ mod tests {
         );
         assert!(
             sqlx::query(AssertSqlSafe(second_active_attempt))
-                .bind(uuid::Uuid::now_v7())
+                .bind(Uuid::now_v7())
                 .bind(spawned.task_id())
                 .execute(&pool)
                 .await
@@ -231,8 +232,8 @@ mod tests {
         );
         assert!(
             sqlx::query(AssertSqlSafe(orphan_run))
-                .bind(uuid::Uuid::now_v7())
-                .bind(uuid::Uuid::now_v7())
+                .bind(Uuid::now_v7())
+                .bind(Uuid::now_v7())
                 .execute(&pool)
                 .await
                 .is_err()
@@ -243,7 +244,7 @@ mod tests {
         );
         assert!(
             sqlx::query(AssertSqlSafe(orphan_checkpoint))
-                .bind(uuid::Uuid::now_v7())
+                .bind(Uuid::now_v7())
                 .execute(&pool)
                 .await
                 .is_err()
@@ -252,7 +253,7 @@ mod tests {
         let other = app.spawn(CONSTRAINT_TASK, json!({"other": true})).await?;
         let other_run_query =
             format!("SELECT last_attempt_run FROM steda.tasks_{queue} WHERE id = $1");
-        let other_run: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(other_run_query))
+        let other_run: Uuid = sqlx::query_scalar(AssertSqlSafe(other_run_query))
             .bind(other.task_id())
             .fetch_one(&pool)
             .await?;

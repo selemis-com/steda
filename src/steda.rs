@@ -1,6 +1,6 @@
 //! Root Steda database handle.
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tower_layer::{Identity, Layer, Stack};
 use tower_service::Service;
 
@@ -87,8 +87,6 @@ impl Steda {
     ///
     /// Returns an error if the database query fails.
     pub async fn queues(&self) -> Result<Vec<String>> {
-        use sqlx::Row as _;
-
         let rows =
             sqlx::query("SELECT name FROM steda.list_queues()").fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|row| row.get("name")).collect())
@@ -104,8 +102,6 @@ impl Steda {
     ///
     /// Returns an error if the cleanup query fails.
     pub async fn cleanup(&self) -> Result<Vec<QueueCleanup>> {
-        use sqlx::Row as _;
-
         let rows = sqlx::query(
             r#"
             SELECT queue_name, tasks_deleted

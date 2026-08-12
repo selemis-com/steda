@@ -24,6 +24,7 @@ mod tests {
         sync::{Notify, Semaphore, oneshot},
         time::{sleep, timeout},
     };
+    use uuid::Uuid;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
@@ -319,7 +320,7 @@ mod tests {
 
         let task_table = format!("tasks_{queue}");
         let run_id_query = format!("SELECT last_attempt_run FROM steda.{task_table} WHERE id = $1");
-        let run_id: uuid::Uuid = sqlx::query_scalar(AssertSqlSafe(run_id_query))
+        let run_id: Uuid = sqlx::query_scalar(AssertSqlSafe(run_id_query))
             .bind(spawned.task_id())
             .fetch_one(&pool)
             .await?;

@@ -18,6 +18,7 @@ mod tests {
         sync::{Notify, Semaphore, oneshot},
         time::timeout,
     };
+    use uuid::Uuid;
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
@@ -108,7 +109,7 @@ mod tests {
         let app = steda.queue(queue)?;
         app.create().await?;
 
-        let task_id = TaskId::from_uuid(uuid::Uuid::now_v7());
+        let task_id = TaskId::from_uuid(Uuid::now_v7());
         let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
             "queueName": app.name(),
             "taskName": RESULT_PROBE.name(),
@@ -128,7 +129,7 @@ mod tests {
         let app = steda.queue(queue)?;
         app.create().await?;
 
-        let task_id = TaskId::from_uuid(uuid::Uuid::now_v7());
+        let task_id = TaskId::from_uuid(Uuid::now_v7());
         let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
             "queueName": app.name(),
             "taskName": RESULT_PROBE.name(),
