@@ -276,6 +276,10 @@
 //! Cargo and `PostgreSQL`. Their comments call out where production systems still need external
 //! idempotency, real provisioning, or application-specific error classification.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/selemis-com/steda/master/.github/assets/logo.jpg",
+    html_favicon_url = "https://raw.githubusercontent.com/selemis-com/steda/master/.github/assets/favicon.ico"
+)]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
