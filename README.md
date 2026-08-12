@@ -274,20 +274,6 @@ authoritative for claims, leases, retries, cancellation, and terminal state.
 
 See [`tower_layer`](examples/tower_layer.rs) for a complete example.
 
-## Development
-
-Repository tests use PostgreSQL through `DATABASE_URL`. SQLx creates isolated migrated databases for
-integration tests, so the configured PostgreSQL user must be allowed to create and drop databases.
-
-```sh
-cp .env.template .env
-docker compose up -d postgres
-make test
-make lint
-```
-
-`make test` runs deterministic tests, generated state-machine histories, example compilation, and doctests. Run the complete repository verification with `make pr`.
-
 ## MSRV
 
 <!--

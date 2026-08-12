@@ -26,17 +26,52 @@ Good bug reports include:
 
 Feature proposals should explain the problem being solved, the intended behavior, and why it belongs in Steda rather than in application code or a separate integration.
 
+## Development
+
+Repository tests use PostgreSQL through `DATABASE_URL`. SQLx creates isolated migrated databases for integration tests, so the configured PostgreSQL user must be allowed to create and drop databases.
+
+Set up a local database with:
+
+```sh
+cp .env.template .env
+docker compose up -d postgres
+```
+
+Run the test suite with:
+
+```sh
+make test
+```
+
+Run linting and formatting checks with:
+
+```sh
+make lint
+```
+
+Build the documentation locally with:
+
+```sh
+make doc
+```
+
+The documentation build uses nightly rustdoc with all features enabled, the `docsrs` configuration, private items included, and warnings denied. It is intentionally stricter than the public documentation build on docs.rs.
+
+Before submitting a pull request, run the complete repository verification:
+
+```sh
+make pr
+```
+
+This runs the repository's formatting, linting, tests, examples, doctests, documentation checks, and other verification steps.
+
 ## Pull requests
 
 Keep pull requests focused on a single logical change.
 
 Please include tests for behavioral changes and update documentation when public behavior or APIs change. New functionality should use Steda's existing abstractions where possible rather than introducing parallel execution or persistence models.
 
-Before submitting a pull request, run:
-
-```sh
-make pr
-```
+Before submitting a pull request, run `make pr`. See [Development](#development) for the local development and verification workflow.
 
 This runs the repository's formatting, linting, tests, examples, doctests, and other verification checks.
 
