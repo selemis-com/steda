@@ -14,12 +14,12 @@
 
 -- Commit or replay one named checkpoint.
 --
--- The first successful insert for `(task_id, step_name)` wins. Later attempts
+-- The first successful insert for `(task_id, checkpoint_name)` wins. Later attempts
 -- receive the existing value with `written = false`; they do not overwrite it.
 CREATE OR REPLACE FUNCTION steda.set_task_checkpoint_state(
     queue_name text,
     task_id uuid,
-    step_name text,
+    checkpoint_name text,
     result jsonb,
     run_id uuid
 )
@@ -33,12 +33,12 @@ DECLARE
     context record;
     inserted_rows integer;
 BEGIN
-    IF step_name IS NULL OR step_name ~ '^[[:space:]]*$' THEN
-        RAISE EXCEPTION 'step_name must be provided';
+    IF checkpoint_name IS NULL OR checkpoint_name ~ '^[[:space:]]*$' THEN
+        RAISE EXCEPTION 'checkpoint_name must be provided';
     END IF;
 
-    IF octet_length(step_name) > 1024 THEN
-        RAISE EXCEPTION 'step_name must be at most 1024 bytes';
+    IF octet_length(checkpoint_name) > 1024 THEN
+        RAISE EXCEPTION 'checkpoint_name must be at most 1024 bytes';
     END IF;
 
     SELECT *
@@ -58,7 +58,7 @@ BEGIN
         context.first_started_at,
         context.observed_at
     ) THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task cancellation deadline has elapsed';
     END IF;
 
@@ -78,7 +78,7 @@ BEGIN
         'checkpoints_' || queue_name
     )
     INTO checkpoint_state
-    USING task_id, step_name, result;
+    USING task_id, checkpoint_name, result;
 
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     written := inserted_rows = 1;
@@ -89,7 +89,7 @@ BEGIN
             'checkpoints_' || queue_name
         )
         INTO checkpoint_state
-        USING task_id, step_name;
+        USING task_id, checkpoint_name;
     END IF;
 
     RETURN NEXT;

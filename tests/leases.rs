@@ -141,7 +141,7 @@ mod tests {
                 .expect_err("expired worker failure must fail"),
         ];
         for error in &expired_transitions {
-            assert_sqlstate(error, "AB003");
+            assert_sqlstate(error, "ST003");
         }
         assert!(fetch_checkpoints(&pool, &queue, first.task_id()).await?.is_empty());
 

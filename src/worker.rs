@@ -592,7 +592,7 @@ mod tests {
         for code in ["08006", "40001", "40P01", "53300", "55P03", "57P01", "57P02", "57P03"] {
             assert!(is_transient_sqlstate(code), "{code} should be transient");
         }
-        for code in ["22023", "23505", "42703", "42P01", "AB001"] {
+        for code in ["22023", "23505", "42703", "42P01", "ST001"] {
             assert!(!is_transient_sqlstate(code), "{code} should be terminal");
         }
     }

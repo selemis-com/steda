@@ -154,6 +154,8 @@ DECLARE
     now_at timestamptz := steda.current_time();
     current_task_state text;
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
     -- Lock active runs before the task row so cancel_task() uses the same
     -- lock acquisition order as complete_run()/fail_run().
     EXECUTE format(
@@ -243,6 +245,8 @@ DECLARE
     new_run_id uuid;
     next_attempt integer;
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
     EXECUTE format(
         $query$
         SELECT attempts, state, enqueue_at, first_started_at, cancellation

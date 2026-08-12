@@ -20,10 +20,10 @@
 -- Steda reserves several application SQLSTATE values for conditions surfaced by
 -- the Rust API:
 --
---   AB001  task cancellation won the transition
---   AB002  addressed run has already failed
---   AB003  worker lease has expired
---   AB004  idempotency key conflicts with the original submission
+--   ST001  task cancellation won the transition
+--   ST002  addressed run has already failed
+--   ST003  worker lease has expired
+--   ST004  idempotency key conflicts with the original submission
 
 -- ======================================================================
 -- Core queue metadata and validation
@@ -135,7 +135,8 @@ BEGIN
                     'failed',
                     'cancelled'
                 )),
-            attempts INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0
+                CHECK (attempts >= 0),
             last_attempt_run UUID NOT NULL,
             cancelled_at TIMESTAMPTZ,
             idempotency_key TEXT UNIQUE
@@ -155,7 +156,8 @@ BEGIN
         CREATE TABLE steda.%I (
             id UUID PRIMARY KEY,
             task_id UUID NOT NULL REFERENCES steda.%I(id) ON DELETE CASCADE,
-            attempt INTEGER NOT NULL,
+            attempt INTEGER NOT NULL
+                CHECK (attempt >= 1),
             state TEXT NOT NULL
                 CHECK (state IN (
                     'pending',
@@ -447,7 +449,7 @@ AS $$
         queue.cleanup_ttl,
         queue.cleanup_limit
     FROM steda.queues queue
-    WHERE queue.name = queue_name;
+    WHERE queue.name = steda.validate_queue_name(queue_name);
 $$;
 
 -- Update the persisted cleanup policy for one queue.
@@ -675,6 +677,62 @@ EXCEPTION
 END;
 $$;
 
+-- Validate and canonicalize a persisted cancellation policy.
+--
+-- Cancellation values are whole non-negative seconds because the Rust API rounds
+-- durations up before crossing the database boundary. Unknown keys and non-integer
+-- values are rejected rather than becoming latent failures in later state transitions.
+CREATE OR REPLACE FUNCTION steda.validate_cancellation_policy(
+    cancellation jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    value numeric;
+    unknown_key text;
+BEGIN
+    IF cancellation IS NULL OR cancellation = 'null'::jsonb THEN
+        RETURN NULL;
+    END IF;
+
+    IF jsonb_typeof(cancellation) <> 'object' THEN
+        RAISE EXCEPTION 'cancellation policy must be a JSON object';
+    END IF;
+
+    IF cancellation = '{}'::jsonb THEN
+        RAISE EXCEPTION 'cancellation policy must define max_delay or max_duration';
+    END IF;
+
+    SELECT keys.key
+    INTO unknown_key
+    FROM jsonb_object_keys(cancellation) AS keys(key)
+    WHERE keys.key NOT IN ('max_delay', 'max_duration')
+    LIMIT 1;
+
+    IF unknown_key IS NOT NULL THEN
+        RAISE EXCEPTION 'cancellation policy does not support key "%"', unknown_key;
+    END IF;
+
+    FOREACH unknown_key IN ARRAY ARRAY['max_delay', 'max_duration']
+    LOOP
+        IF cancellation ? unknown_key THEN
+            IF jsonb_typeof(cancellation -> unknown_key) <> 'number' THEN
+                RAISE EXCEPTION 'cancellation % must be a whole number of seconds', unknown_key;
+            END IF;
+
+            value := (cancellation ->> unknown_key)::numeric;
+            IF value <> trunc(value) OR value < 0 OR value > 9223372036854775807::numeric THEN
+                RAISE EXCEPTION 'cancellation % must be a whole number between 0 and 9223372036854775807 seconds', unknown_key;
+            END IF;
+        END IF;
+    END LOOP;
+
+    RETURN cancellation;
+END;
+$$;
+
 -- Evaluate a task cancellation deadline at one authoritative database timestamp.
 --
 -- Before a task starts, only max_delay applies. After its first claim, max_duration
@@ -760,7 +818,7 @@ $$;
 -- An idempotency key identifies the complete original submission request.
 -- Replaying the same key with the same task name, params, headers, retry policy,
 -- original attempt budget, and cancellation policy returns the existing task.
--- Reusing the key for a different request raises SQLSTATE `AB004`. Manual retry
+-- Reusing the key for a different request raises SQLSTATE `ST004`. Manual retry
 -- does not alter that original submission identity.
 CREATE OR REPLACE FUNCTION steda.spawn_task(
     queue_name text,
@@ -798,6 +856,14 @@ DECLARE
     now_at timestamptz := steda.current_time();
     normalized_params jsonb := coalesce(params, 'null'::jsonb);
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
+    IF options IS NULL THEN
+        options := '{}'::jsonb;
+    ELSIF jsonb_typeof(options) <> 'object' THEN
+        RAISE EXCEPTION 'spawn options must be a JSON object';
+    END IF;
+
     IF task_name IS NULL OR task_name ~ '^[[:space:]]*$' THEN
         RAISE EXCEPTION 'task_name must be provided';
     END IF;
@@ -806,27 +872,25 @@ BEGIN
         RAISE EXCEPTION 'task_name must be at most 1024 bytes';
     END IF;
 
-    IF options IS NOT NULL THEN
-        task_headers := options -> 'headers';
-        task_retry_strategy := options -> 'retry_strategy';
+    task_headers := options -> 'headers';
+    task_retry_strategy := options -> 'retry_strategy';
 
-        IF task_headers = 'null'::jsonb OR task_headers = '{}'::jsonb THEN
-            task_headers := NULL;
-        ELSIF task_headers IS NOT NULL AND jsonb_typeof(task_headers) <> 'object' THEN
-            RAISE EXCEPTION 'headers must be a JSON object';
-        END IF;
-
-        IF options ? 'max_attempts' THEN
-            maximum_attempts := (options ->> 'max_attempts')::int;
-
-            IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
-                RAISE EXCEPTION 'max_attempts must be >= 1';
-            END IF;
-        END IF;
-
-        cancellation_policy := options -> 'cancellation';
-        idempotency_key := options ->> 'idempotency_key';
+    IF task_headers = 'null'::jsonb OR task_headers = '{}'::jsonb THEN
+        task_headers := NULL;
+    ELSIF task_headers IS NOT NULL AND jsonb_typeof(task_headers) <> 'object' THEN
+        RAISE EXCEPTION 'headers must be a JSON object';
     END IF;
+
+    IF options ? 'max_attempts' THEN
+        maximum_attempts := (options ->> 'max_attempts')::int;
+
+        IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
+            RAISE EXCEPTION 'max_attempts must be >= 1';
+        END IF;
+    END IF;
+
+    cancellation_policy := steda.validate_cancellation_policy(options -> 'cancellation');
+    idempotency_key := options ->> 'idempotency_key';
 
     maximum_attempts := coalesce(maximum_attempts, 5);
     task_retry_strategy := coalesce(task_retry_strategy, steda.default_retry_strategy());
@@ -945,7 +1009,7 @@ BEGIN
             OR existing_initial_max_attempts IS DISTINCT FROM maximum_attempts
             OR existing_cancellation IS DISTINCT FROM cancellation_policy
         THEN
-            RAISE EXCEPTION sqlstate 'AB004'
+            RAISE EXCEPTION sqlstate 'ST004'
                 USING message = format(
                     'Idempotency key "%s" was already used for a different task request',
                     idempotency_key
@@ -1128,12 +1192,12 @@ BEGIN
     -- logical task. A historical failed attempt remains failed even if a later
     -- authoritative retry is subsequently cancelled.
     IF context.run_state = 'cancelled' THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task has been cancelled';
     END IF;
 
     IF context.run_state = 'failed' THEN
-        RAISE EXCEPTION sqlstate 'AB002'
+        RAISE EXCEPTION sqlstate 'ST002'
             USING message = format(
                 'Run "%s" has already failed in queue "%s"',
                 run_id,
@@ -1146,7 +1210,7 @@ BEGIN
     END IF;
 
     IF context.task_state = 'cancelled' THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task has been cancelled';
     END IF;
 
@@ -1170,7 +1234,7 @@ BEGIN
             RAISE EXCEPTION 'Lease for run "%" has not expired in queue "%"', run_id, queue_name;
         END IF;
     ELSIF context.claim_expires_at <= context.observed_at THEN
-        RAISE EXCEPTION sqlstate 'AB003'
+        RAISE EXCEPTION sqlstate 'ST003'
             USING message = format(
                 'Lease for run "%s" has expired in queue "%s"',
                 run_id,
@@ -1477,6 +1541,8 @@ DECLARE
     now_at timestamptz := steda.current_time();
     current_task_state text;
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
     -- Lock active runs before the task row so cancel_task() uses the same
     -- lock acquisition order as complete_run()/fail_run().
     EXECUTE format(
@@ -1566,6 +1632,8 @@ DECLARE
     new_run_id uuid;
     next_attempt integer;
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
     EXECUTE format(
         $query$
         SELECT attempts, state, enqueue_at, first_started_at, cancellation
@@ -1696,8 +1764,8 @@ BEGIN
             jsonb_build_object(
                 'name', '$LeaseExpired',
                 'message', 'worker did not renew task lease before expiry',
-                'workerId', context.claimed_by,
-                'claimExpiredAt', context.claim_expires_at,
+                'worker_id', context.claimed_by,
+                'claim_expired_at', context.claim_expires_at,
                 'attempt', context.attempt
             )
         ),
@@ -2082,12 +2150,12 @@ $$;
 
 -- Commit or replay one named checkpoint.
 --
--- The first successful insert for `(task_id, step_name)` wins. Later attempts
+-- The first successful insert for `(task_id, checkpoint_name)` wins. Later attempts
 -- receive the existing value with `written = false`; they do not overwrite it.
 CREATE OR REPLACE FUNCTION steda.set_task_checkpoint_state(
     queue_name text,
     task_id uuid,
-    step_name text,
+    checkpoint_name text,
     result jsonb,
     run_id uuid
 )
@@ -2101,12 +2169,12 @@ DECLARE
     context record;
     inserted_rows integer;
 BEGIN
-    IF step_name IS NULL OR step_name ~ '^[[:space:]]*$' THEN
-        RAISE EXCEPTION 'step_name must be provided';
+    IF checkpoint_name IS NULL OR checkpoint_name ~ '^[[:space:]]*$' THEN
+        RAISE EXCEPTION 'checkpoint_name must be provided';
     END IF;
 
-    IF octet_length(step_name) > 1024 THEN
-        RAISE EXCEPTION 'step_name must be at most 1024 bytes';
+    IF octet_length(checkpoint_name) > 1024 THEN
+        RAISE EXCEPTION 'checkpoint_name must be at most 1024 bytes';
     END IF;
 
     SELECT *
@@ -2126,7 +2194,7 @@ BEGIN
         context.first_started_at,
         context.observed_at
     ) THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task cancellation deadline has elapsed';
     END IF;
 
@@ -2146,7 +2214,7 @@ BEGIN
         'checkpoints_' || queue_name
     )
     INTO checkpoint_state
-    USING task_id, step_name, result;
+    USING task_id, checkpoint_name, result;
 
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     written := inserted_rows = 1;
@@ -2157,7 +2225,7 @@ BEGIN
             'checkpoints_' || queue_name
         )
         INTO checkpoint_state
-        USING task_id, step_name;
+        USING task_id, checkpoint_name;
     END IF;
 
     RETURN NEXT;

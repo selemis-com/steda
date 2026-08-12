@@ -115,16 +115,16 @@ pub(crate) fn map_sqlx_error(e: sqlx::Error) -> Error {
     if let sqlx::Error::Database(db_err) = &e {
         match db_err.code().as_deref() {
             // Task cancelled.
-            Some("AB001") => return Error::Cancelled,
+            Some("ST001") => return Error::Cancelled,
 
             // Run already failed.
-            Some("AB002") => return Error::FailedRun,
+            Some("ST002") => return Error::FailedRun,
 
             // Finite run lease expired.
-            Some("AB003") => return Error::LeaseLost,
+            Some("ST003") => return Error::LeaseLost,
 
             // Idempotency key reused for a different request.
-            Some("AB004") => return Error::IdempotencyConflict,
+            Some("ST004") => return Error::IdempotencyConflict,
 
             _ => {}
         }

@@ -139,12 +139,12 @@ BEGIN
     -- logical task. A historical failed attempt remains failed even if a later
     -- authoritative retry is subsequently cancelled.
     IF context.run_state = 'cancelled' THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task has been cancelled';
     END IF;
 
     IF context.run_state = 'failed' THEN
-        RAISE EXCEPTION sqlstate 'AB002'
+        RAISE EXCEPTION sqlstate 'ST002'
             USING message = format(
                 'Run "%s" has already failed in queue "%s"',
                 run_id,
@@ -157,7 +157,7 @@ BEGIN
     END IF;
 
     IF context.task_state = 'cancelled' THEN
-        RAISE EXCEPTION sqlstate 'AB001'
+        RAISE EXCEPTION sqlstate 'ST001'
             USING message = 'Task has been cancelled';
     END IF;
 
@@ -181,7 +181,7 @@ BEGIN
             RAISE EXCEPTION 'Lease for run "%" has not expired in queue "%"', run_id, queue_name;
         END IF;
     ELSIF context.claim_expires_at <= context.observed_at THEN
-        RAISE EXCEPTION sqlstate 'AB003'
+        RAISE EXCEPTION sqlstate 'ST003'
             USING message = format(
                 'Lease for run "%s" has expired in queue "%s"',
                 run_id,

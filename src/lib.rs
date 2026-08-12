@@ -190,8 +190,8 @@
 //! ## Schema and queue lifecycle
 //!
 //! Apply the `sql/steda.sql` file from the Steda release before code that depends on that schema
-//! begins spawning or claiming work. Apply the new release's file again when upgrading. Applications
-//! that prefer programmatic schema management can use [`migrate`].
+//! begins spawning or claiming work. Apply the new release's file again when upgrading.
+//! Applications that prefer programmatic schema management can use [`migrate`].
 //!
 //! [`Steda::queue`] creates a lightweight handle only. [`Queue::create`] creates its durable
 //! queue-specific `PostgreSQL` storage and is idempotent for a healthy existing queue. Repeated

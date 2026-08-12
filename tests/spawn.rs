@@ -198,6 +198,42 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn postgres_rejects_noncanonical_cancellation_policies(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("invalid_cancellation_sql");
+        let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
+        app.create().await?;
+
+        for cancellation in [
+            json!({}),
+            json!({"unknown": 1}),
+            json!({"max_delay": -1}),
+            json!({"max_duration": 1.5}),
+            json!({"max_delay": "1"}),
+        ] {
+            let options = json!({"cancellation": cancellation});
+            sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
+                .bind(&queue)
+                .bind(UNREGISTERED_IDEM.name())
+                .bind(options)
+                .fetch_one(&pool)
+                .await
+                .expect_err("noncanonical cancellation policy must be rejected by PostgreSQL");
+        }
+
+        let invalid_options = json!([]);
+        sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
+            .bind(&queue)
+            .bind(UNREGISTERED_IDEM.name())
+            .bind(invalid_options)
+            .fetch_one(&pool)
+            .await
+            .expect_err("spawn options must be a JSON object");
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn spawn_respects_default_and_explicit_attempt_budgets(pool: PgPool) -> Result<()> {
         let queue = unique_queue("spawn_attempts");
         let app = Steda::from_pool(pool).queue(queue.clone())?;

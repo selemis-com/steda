@@ -635,10 +635,10 @@ mod tests {
         now: OffsetDateTime,
     ) -> Option<Option<&'static str>> {
         match status.state.as_str() {
-            "cancelled" => Some(Some("AB001")),
-            "failed" => Some(Some("AB002")),
+            "cancelled" => Some(Some("ST001")),
+            "failed" => Some(Some("ST002")),
             "running" if status.claim_expires_at.is_some_and(|expires_at| expires_at <= now) => {
-                Some(Some("AB003"))
+                Some(Some("ST003"))
             }
             "running" => None,
             _ => Some(None),
@@ -1747,7 +1747,7 @@ mod tests {
                 let now = current_time(connection).await?;
                 let step_name = checkpoint_name(step);
                 let expected_rejection = expected_run_rejection(&status, now)
-                    .or_else(|| max_duration_due(&task, now).then_some(Some("AB001")));
+                    .or_else(|| max_duration_due(&task, now).then_some(Some("ST001")));
                 if let Some(expected_sqlstate) = expected_rejection {
                     let result = sqlx::query(
                         "SELECT checkpoint_state, written FROM steda.set_task_checkpoint_state($1, $2, $3, $4, $5)",

@@ -292,7 +292,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect_err("historical failed attempt must remain failed after task cancellation");
-        assert_sqlstate(&error, "AB002");
+        assert_sqlstate(&error, "ST002");
 
         app.delete().await?;
         Ok(())

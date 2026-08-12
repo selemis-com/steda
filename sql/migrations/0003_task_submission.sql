@@ -166,6 +166,62 @@ EXCEPTION
 END;
 $$;
 
+-- Validate and canonicalize a persisted cancellation policy.
+--
+-- Cancellation values are whole non-negative seconds because the Rust API rounds
+-- durations up before crossing the database boundary. Unknown keys and non-integer
+-- values are rejected rather than becoming latent failures in later state transitions.
+CREATE OR REPLACE FUNCTION steda.validate_cancellation_policy(
+    cancellation jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    value numeric;
+    unknown_key text;
+BEGIN
+    IF cancellation IS NULL OR cancellation = 'null'::jsonb THEN
+        RETURN NULL;
+    END IF;
+
+    IF jsonb_typeof(cancellation) <> 'object' THEN
+        RAISE EXCEPTION 'cancellation policy must be a JSON object';
+    END IF;
+
+    IF cancellation = '{}'::jsonb THEN
+        RAISE EXCEPTION 'cancellation policy must define max_delay or max_duration';
+    END IF;
+
+    SELECT keys.key
+    INTO unknown_key
+    FROM jsonb_object_keys(cancellation) AS keys(key)
+    WHERE keys.key NOT IN ('max_delay', 'max_duration')
+    LIMIT 1;
+
+    IF unknown_key IS NOT NULL THEN
+        RAISE EXCEPTION 'cancellation policy does not support key "%"', unknown_key;
+    END IF;
+
+    FOREACH unknown_key IN ARRAY ARRAY['max_delay', 'max_duration']
+    LOOP
+        IF cancellation ? unknown_key THEN
+            IF jsonb_typeof(cancellation -> unknown_key) <> 'number' THEN
+                RAISE EXCEPTION 'cancellation % must be a whole number of seconds', unknown_key;
+            END IF;
+
+            value := (cancellation ->> unknown_key)::numeric;
+            IF value <> trunc(value) OR value < 0 OR value > 9223372036854775807::numeric THEN
+                RAISE EXCEPTION 'cancellation % must be a whole number between 0 and 9223372036854775807 seconds', unknown_key;
+            END IF;
+        END IF;
+    END LOOP;
+
+    RETURN cancellation;
+END;
+$$;
+
 -- Evaluate a task cancellation deadline at one authoritative database timestamp.
 --
 -- Before a task starts, only max_delay applies. After its first claim, max_duration
@@ -251,7 +307,7 @@ $$;
 -- An idempotency key identifies the complete original submission request.
 -- Replaying the same key with the same task name, params, headers, retry policy,
 -- original attempt budget, and cancellation policy returns the existing task.
--- Reusing the key for a different request raises SQLSTATE `AB004`. Manual retry
+-- Reusing the key for a different request raises SQLSTATE `ST004`. Manual retry
 -- does not alter that original submission identity.
 CREATE OR REPLACE FUNCTION steda.spawn_task(
     queue_name text,
@@ -289,6 +345,14 @@ DECLARE
     now_at timestamptz := steda.current_time();
     normalized_params jsonb := coalesce(params, 'null'::jsonb);
 BEGIN
+    queue_name := steda.validate_queue_name(queue_name);
+
+    IF options IS NULL THEN
+        options := '{}'::jsonb;
+    ELSIF jsonb_typeof(options) <> 'object' THEN
+        RAISE EXCEPTION 'spawn options must be a JSON object';
+    END IF;
+
     IF task_name IS NULL OR task_name ~ '^[[:space:]]*$' THEN
         RAISE EXCEPTION 'task_name must be provided';
     END IF;
@@ -297,27 +361,25 @@ BEGIN
         RAISE EXCEPTION 'task_name must be at most 1024 bytes';
     END IF;
 
-    IF options IS NOT NULL THEN
-        task_headers := options -> 'headers';
-        task_retry_strategy := options -> 'retry_strategy';
+    task_headers := options -> 'headers';
+    task_retry_strategy := options -> 'retry_strategy';
 
-        IF task_headers = 'null'::jsonb OR task_headers = '{}'::jsonb THEN
-            task_headers := NULL;
-        ELSIF task_headers IS NOT NULL AND jsonb_typeof(task_headers) <> 'object' THEN
-            RAISE EXCEPTION 'headers must be a JSON object';
-        END IF;
-
-        IF options ? 'max_attempts' THEN
-            maximum_attempts := (options ->> 'max_attempts')::int;
-
-            IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
-                RAISE EXCEPTION 'max_attempts must be >= 1';
-            END IF;
-        END IF;
-
-        cancellation_policy := options -> 'cancellation';
-        idempotency_key := options ->> 'idempotency_key';
+    IF task_headers = 'null'::jsonb OR task_headers = '{}'::jsonb THEN
+        task_headers := NULL;
+    ELSIF task_headers IS NOT NULL AND jsonb_typeof(task_headers) <> 'object' THEN
+        RAISE EXCEPTION 'headers must be a JSON object';
     END IF;
+
+    IF options ? 'max_attempts' THEN
+        maximum_attempts := (options ->> 'max_attempts')::int;
+
+        IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
+            RAISE EXCEPTION 'max_attempts must be >= 1';
+        END IF;
+    END IF;
+
+    cancellation_policy := steda.validate_cancellation_policy(options -> 'cancellation');
+    idempotency_key := options ->> 'idempotency_key';
 
     maximum_attempts := coalesce(maximum_attempts, 5);
     task_retry_strategy := coalesce(task_retry_strategy, steda.default_retry_strategy());
@@ -436,7 +498,7 @@ BEGIN
             OR existing_initial_max_attempts IS DISTINCT FROM maximum_attempts
             OR existing_cancellation IS DISTINCT FROM cancellation_policy
         THEN
-            RAISE EXCEPTION sqlstate 'AB004'
+            RAISE EXCEPTION sqlstate 'ST004'
                 USING message = format(
                     'Idempotency key "%s" was already used for a different task request',
                     idempotency_key

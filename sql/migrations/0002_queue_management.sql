@@ -115,7 +115,7 @@ AS $$
         queue.cleanup_ttl,
         queue.cleanup_limit
     FROM steda.queues queue
-    WHERE queue.name = queue_name;
+    WHERE queue.name = steda.validate_queue_name(queue_name);
 $$;
 
 -- Update the persisted cleanup policy for one queue.

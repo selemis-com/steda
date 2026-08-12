@@ -53,7 +53,8 @@ BEGIN
                     'failed',
                     'cancelled'
                 )),
-            attempts INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0
+                CHECK (attempts >= 0),
             last_attempt_run UUID NOT NULL,
             cancelled_at TIMESTAMPTZ,
             idempotency_key TEXT UNIQUE
@@ -73,7 +74,8 @@ BEGIN
         CREATE TABLE steda.%I (
             id UUID PRIMARY KEY,
             task_id UUID NOT NULL REFERENCES steda.%I(id) ON DELETE CASCADE,
-            attempt INTEGER NOT NULL,
+            attempt INTEGER NOT NULL
+                CHECK (attempt >= 1),
             state TEXT NOT NULL
                 CHECK (state IN (
                     'pending',

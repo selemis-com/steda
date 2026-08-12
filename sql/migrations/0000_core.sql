@@ -20,10 +20,10 @@
 -- Steda reserves several application SQLSTATE values for conditions surfaced by
 -- the Rust API:
 --
---   AB001  task cancellation won the transition
---   AB002  addressed run has already failed
---   AB003  worker lease has expired
---   AB004  idempotency key conflicts with the original submission
+--   ST001  task cancellation won the transition
+--   ST002  addressed run has already failed
+--   ST003  worker lease has expired
+--   ST004  idempotency key conflicts with the original submission
 
 -- ======================================================================
 -- Core queue metadata and validation

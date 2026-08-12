@@ -52,8 +52,8 @@ BEGIN
             jsonb_build_object(
                 'name', '$LeaseExpired',
                 'message', 'worker did not renew task lease before expiry',
-                'workerId', context.claimed_by,
-                'claimExpiredAt', context.claim_expires_at,
+                'worker_id', context.claimed_by,
+                'claim_expired_at', context.claim_expires_at,
                 'attempt', context.attempt
             )
         ),
