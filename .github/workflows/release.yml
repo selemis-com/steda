@@ -188,6 +188,12 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.sha }}
+
       - name: Verify remote tag still targets release commit
         env:
           EXPECTED_SHA: ${{ needs.prepare.outputs.sha }}
@@ -220,6 +226,7 @@ jobs:
           set -euo pipefail
 
           gh release create "$TAG" \
+            sql/steda.sql \
             --verify-tag \
             --generate-notes \
             --title "Steda $TAG"
