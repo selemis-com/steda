@@ -200,6 +200,7 @@ check: ## Check all crates and targets.
 .PHONY: pr
 pr: ## Run all checks and tests.
 	$(MAKE) deny && \
+	$(MAKE) check && \
 	$(MAKE) lint && \
 	$(MAKE) test && \
 	$(MAKE) doc && \

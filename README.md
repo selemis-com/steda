@@ -55,6 +55,13 @@ cargo add steda --features tls-native-tls
 
 ## Quick start
 
+The example below also uses Serde derives and the Tokio runtime:
+
+```sh
+cargo add serde --features derive
+cargo add tokio --features macros,rt-multi-thread
+```
+
 Define a task:
 
 ```rust
@@ -89,7 +96,8 @@ let worker = queue
         Ok(ResizeImageOutput { resized_key })
     })
     .build()?;
-worker.run().await?;
+
+let _worker = tokio::spawn(async move { worker.run().await });
 ```
 
 Producers use the same task definition:

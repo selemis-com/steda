@@ -181,9 +181,10 @@ $$;
 
 -- Verify the storage created for an already-registered queue without mutating it.
 --
--- Repeated queue creation uses this as an integrity check. Missing tables,
--- required columns, indexes, primary keys, or foreign keys are treated as
--- corruption/configuration errors rather than repaired implicitly.
+-- Repeated queue creation uses this as a basic storage-shape check. Missing
+-- tables, expected columns, required index names, primary keys, or foreign-key
+-- relationships are treated as corruption/configuration errors rather than
+-- repaired implicitly. This does not attempt exhaustive schema introspection.
 CREATE OR REPLACE FUNCTION steda.verify_queue_storage(queue_name text)
 RETURNS void
 LANGUAGE plpgsql
@@ -202,7 +203,8 @@ BEGIN
         RAISE EXCEPTION 'Queue "%" storage is incomplete', queue_name;
     END IF;
 
-    -- These zero-row reads validate the required persisted shape without changing it.
+    -- These zero-row reads verify that the expected persisted columns are present
+    -- without attempting to prove every type, nullability, or constraint detail.
     EXECUTE format(
         'SELECT id, name, params, headers, retry_strategy, initial_max_attempts, max_attempts, cancellation, enqueue_at, first_started_at, state, attempts, last_attempt_run, cancelled_at, idempotency_key FROM steda.%I LIMIT 0',
         'tasks_' || queue_name
