@@ -117,7 +117,7 @@ pub(crate) async fn fetch_task_result_snapshot(
     fetch_task_result_snapshot_with(pool, queue_name, task_name, task_id).await
 }
 
-/// Fetches the current task result snapshot through one SQLx executor.
+/// Fetches the current task result snapshot through one `SQLx` executor.
 pub(crate) async fn fetch_task_result_snapshot_with<'e, E>(
     executor: E,
     queue_name: &str,

@@ -107,8 +107,8 @@ where
 /// Run the Tower execution-layer example.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    // `common::connect` applies the bundled schema. Rebuild the lightweight root handle around the same
-    // pool so the execution layer is frozen before queues/workers are created.
+    // `common::connect` applies the bundled schema. Rebuild the lightweight root handle around the
+    // same pool so the execution layer is frozen before queues/workers are created.
     let base = common::connect().await?;
     let completed_calls = Arc::new(AtomicU64::new(0));
     let steda = Steda::builder(base.pool().clone())

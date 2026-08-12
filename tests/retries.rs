@@ -248,7 +248,7 @@ mod tests {
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-        assert!(matches!(spawned.snapshot().await?, Some(steda::TaskSnapshot::Failed { .. })));
+        assert!(matches!(spawned.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
 
         app.delete().await?;
         Ok(())
@@ -280,9 +280,8 @@ mod tests {
         task.retry_in(&mut rolled_back).await?;
         rolled_back.rollback().await?;
 
-        let application_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM application_retries")
-            .fetch_one(&pool)
-            .await?;
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_retries").fetch_one(&pool).await?;
         assert_eq!(application_rows, 0);
         assert!(matches!(task.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
 
@@ -293,9 +292,8 @@ mod tests {
         task.retry_in(&mut committed).await?;
         committed.commit().await?;
 
-        let application_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM application_retries")
-            .fetch_one(&pool)
-            .await?;
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_retries").fetch_one(&pool).await?;
         assert_eq!(application_rows, 1);
         assert!(matches!(task.snapshot().await?, Some(TaskSnapshot::Pending)));
 

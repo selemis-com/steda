@@ -181,7 +181,7 @@ where
     Input: Serialize + Send + 'static,
     Output: DeserializeOwned + Send + 'static,
 {
-    /// Submit this task through a caller-owned SQLx transaction.
+    /// Submit this task through a caller-owned `SQLx` transaction.
     ///
     /// Use this when durable task creation must commit atomically with application state in the
     /// same `PostgreSQL` transaction. The returned task is not visible to other database sessions
@@ -226,9 +226,7 @@ where
         self,
         transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<SpawnedTask<Input, Output>> {
-        self.queue
-            .spawn_typed_on(self.task, self.input, self.options, &mut **transaction)
-            .await
+        self.queue.spawn_typed_on(self.task, self.input, self.options, transaction).await
     }
 }
 
@@ -478,7 +476,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
         self.queue.cancel_task(self.task_id()).await
     }
 
-    /// Cancel this logical task through a caller-owned SQLx transaction.
+    /// Cancel this logical task through a caller-owned `SQLx` transaction.
     ///
     /// Use this when application state and task cancellation must commit atomically. The caller
     /// remains responsible for committing or rolling back the transaction.
@@ -493,11 +491,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ) -> Result<()> {
         let connection = &mut **transaction;
         self.queue
-            .ensure_task_ref_on(
-                self.task_ref.task_name(),
-                self.task_id(),
-                &mut *connection,
-            )
+            .ensure_task_ref_on(self.task_ref.task_name(), self.task_id(), &mut *connection)
             .await?;
         self.queue.cancel_task_on(self.task_id(), &mut *connection).await
     }
@@ -512,7 +506,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
         self.queue.retry_task(self.task_id()).await
     }
 
-    /// Retry this logical task through a caller-owned SQLx transaction.
+    /// Retry this logical task through a caller-owned `SQLx` transaction.
     ///
     /// Use this when application state and manual retry creation must commit atomically. The
     /// caller remains responsible for committing or rolling back the transaction.
@@ -527,11 +521,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ) -> Result<crate::RunId> {
         let connection = &mut **transaction;
         self.queue
-            .ensure_task_ref_on(
-                self.task_ref.task_name(),
-                self.task_id(),
-                &mut *connection,
-            )
+            .ensure_task_ref_on(self.task_ref.task_name(), self.task_id(), &mut *connection)
             .await?;
         self.queue.retry_task_on(self.task_id(), &mut *connection).await
     }
@@ -654,7 +644,7 @@ impl<Input, Output> SpawnedTask<Input, Output> {
         self.handle.cancel().await
     }
 
-    /// Cancel this logical task through a caller-owned SQLx transaction.
+    /// Cancel this logical task through a caller-owned `SQLx` transaction.
     ///
     /// # Errors
     ///
@@ -675,7 +665,7 @@ impl<Input, Output> SpawnedTask<Input, Output> {
         self.handle.retry().await
     }
 
-    /// Retry this logical task through a caller-owned SQLx transaction.
+    /// Retry this logical task through a caller-owned `SQLx` transaction.
     ///
     /// # Errors
     ///

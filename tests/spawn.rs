@@ -43,10 +43,8 @@ mod tests {
         sqlx::query("INSERT INTO application_changes (id) VALUES (1)")
             .execute(&mut *rolled_back)
             .await?;
-        let rolled_back_task = queue
-            .spawn(UNREGISTERED_IDEM, json!({"change": 1}))
-            .submit(&mut rolled_back)
-            .await?;
+        let rolled_back_task =
+            queue.spawn(UNREGISTERED_IDEM, json!({"change": 1})).submit(&mut rolled_back).await?;
         rolled_back.rollback().await?;
 
         let application_rows: i64 =
@@ -58,10 +56,8 @@ mod tests {
         sqlx::query("INSERT INTO application_changes (id) VALUES (2)")
             .execute(&mut *committed)
             .await?;
-        let committed_task = queue
-            .spawn(UNREGISTERED_IDEM, json!({"change": 2}))
-            .submit(&mut committed)
-            .await?;
+        let committed_task =
+            queue.spawn(UNREGISTERED_IDEM, json!({"change": 2})).submit(&mut committed).await?;
         committed.commit().await?;
 
         let application_rows: i64 =

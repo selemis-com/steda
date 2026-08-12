@@ -139,7 +139,7 @@ impl Queue {
         self.spawn_typed_with(task, input, options, connection).await
     }
 
-    /// Serialize and persist a typed task spawn through one SQLx executor.
+    /// Serialize and persist a typed task spawn through one `SQLx` executor.
     async fn spawn_typed_with<'e, Input, Output, E>(
         &self,
         task: Task<Input, Output>,
@@ -208,7 +208,7 @@ impl Queue {
         self.cancel_task_with(task_id, connection).await
     }
 
-    /// Cancel a task by ID through one SQLx executor.
+    /// Cancel a task by ID through one `SQLx` executor.
     async fn cancel_task_with<'e, E>(&self, task_id: TaskId, executor: E) -> Result<()>
     where
         E: Executor<'e, Database = Postgres>,
@@ -358,7 +358,8 @@ impl Queue {
         Ok(())
     }
 
-    /// Retry a terminally failed logical task with one additional attempt through this queue's pool.
+    /// Retry a terminally failed logical task with one additional attempt through this queue's
+    /// pool.
     pub(crate) async fn retry_task(&self, task_id: TaskId) -> Result<RunId> {
         self.retry_task_with(task_id, &self.pool).await
     }
@@ -372,7 +373,7 @@ impl Queue {
         self.retry_task_with(task_id, connection).await
     }
 
-    /// Retry a terminally failed logical task through one SQLx executor.
+    /// Retry a terminally failed logical task through one `SQLx` executor.
     ///
     /// The logical task ID and previously committed checkpoints are preserved. The effective
     /// attempt budget grows to admit the new run, while the original spawn-time attempt budget
