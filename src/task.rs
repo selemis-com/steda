@@ -478,6 +478,30 @@ impl<Input, Output> TaskHandle<Input, Output> {
         self.queue.cancel_task(self.task_id()).await
     }
 
+    /// Cancel this logical task through a caller-owned SQLx transaction.
+    ///
+    /// Use this when application state and task cancellation must commit atomically. The caller
+    /// remains responsible for committing or rolling back the transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task reference no longer matches the persisted task or the database
+    /// cancellation fails.
+    pub async fn cancel_in(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<()> {
+        let connection = &mut **transaction;
+        self.queue
+            .ensure_task_ref_on(
+                self.task_ref.task_name(),
+                self.task_id(),
+                &mut *connection,
+            )
+            .await?;
+        self.queue.cancel_task_on(self.task_id(), &mut *connection).await
+    }
+
     /// Retry a terminally failed logical task with one additional attempt.
     ///
     /// # Errors
@@ -486,6 +510,30 @@ impl<Input, Output> TaskHandle<Input, Output> {
     pub async fn retry(&self) -> Result<crate::RunId> {
         self.queue.ensure_task_ref(self.task_ref.task_name(), self.task_id()).await?;
         self.queue.retry_task(self.task_id()).await
+    }
+
+    /// Retry this logical task through a caller-owned SQLx transaction.
+    ///
+    /// Use this when application state and manual retry creation must commit atomically. The
+    /// caller remains responsible for committing or rolling back the transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task reference no longer matches the persisted task, the task is
+    /// missing or not failed, or the database retry fails.
+    pub async fn retry_in(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<crate::RunId> {
+        let connection = &mut **transaction;
+        self.queue
+            .ensure_task_ref_on(
+                self.task_ref.task_name(),
+                self.task_id(),
+                &mut *connection,
+            )
+            .await?;
+        self.queue.retry_task_on(self.task_id(), &mut *connection).await
     }
 
     /// Wait for the task to reach a terminal state and return its typed output.
@@ -606,6 +654,18 @@ impl<Input, Output> SpawnedTask<Input, Output> {
         self.handle.cancel().await
     }
 
+    /// Cancel this logical task through a caller-owned SQLx transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cancellation fails.
+    pub async fn cancel_in(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<()> {
+        self.handle.cancel_in(transaction).await
+    }
+
     /// Retry a terminally failed logical task with one additional attempt.
     ///
     /// # Errors
@@ -613,6 +673,18 @@ impl<Input, Output> SpawnedTask<Input, Output> {
     /// Returns an error if retrying the task fails.
     pub async fn retry(&self) -> Result<crate::RunId> {
         self.handle.retry().await
+    }
+
+    /// Retry this logical task through a caller-owned SQLx transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if retrying the task fails.
+    pub async fn retry_in(
+        &self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<crate::RunId> {
+        self.handle.retry_in(transaction).await
     }
 
     /// Wait for terminal completion and return the typed task output.

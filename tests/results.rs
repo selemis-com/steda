@@ -59,6 +59,49 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn cancellation_can_commit_atomically_with_application_state(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("transactional_cancel");
+        let app = Steda::from_pool(pool.clone()).queue(queue)?;
+        app.create().await?;
+        sqlx::query("CREATE TABLE application_cancellations (id integer PRIMARY KEY)")
+            .execute(&pool)
+            .await?;
+
+        let rolled_back_task = app.spawn(RESULT_PROBE, json!({"change": 1})).await?;
+        let mut rolled_back = pool.begin().await?;
+        sqlx::query("INSERT INTO application_cancellations (id) VALUES (1)")
+            .execute(&mut *rolled_back)
+            .await?;
+        rolled_back_task.cancel_in(&mut rolled_back).await?;
+        rolled_back.rollback().await?;
+
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_cancellations")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(application_rows, 0);
+        assert!(matches!(rolled_back_task.snapshot().await?, Some(TaskSnapshot::Pending)));
+
+        let committed_task = app.spawn(RESULT_PROBE, json!({"change": 2})).await?;
+        let mut committed = pool.begin().await?;
+        sqlx::query("INSERT INTO application_cancellations (id) VALUES (2)")
+            .execute(&mut *committed)
+            .await?;
+        committed_task.cancel_in(&mut committed).await?;
+        committed.commit().await?;
+
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_cancellations")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(application_rows, 1);
+        assert!(matches!(committed_task.snapshot().await?, Some(TaskSnapshot::Cancelled)));
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn reattached_task_snapshot_returns_none_for_unknown_task(pool: PgPool) -> Result<()> {
         let queue = unique_queue("result_missing");
         let steda = Steda::from_pool(pool);

@@ -19,7 +19,7 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::{AssertSqlSafe, PgPool, Row};
-    use steda::{Error, Result, RetryStrategy, RunId, Steda, Task};
+    use steda::{Error, Result, RetryStrategy, RunId, Steda, Task, TaskSnapshot};
     use time::OffsetDateTime;
 
     use super::{
@@ -249,6 +249,55 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         assert!(matches!(spawned.snapshot().await?, Some(steda::TaskSnapshot::Failed { .. })));
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn manual_retry_can_commit_atomically_with_application_state(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("transactional_retry");
+        let app = Steda::from_pool(pool.clone()).queue(queue)?;
+        app.create().await?;
+        sqlx::query("CREATE TABLE application_retries (id integer PRIMARY KEY)")
+            .execute(&pool)
+            .await?;
+
+        let worker = app
+            .worker()
+            .task(RETRY_PROBE, async |_params: Value, _ctx| {
+                Err::<Value, Error>(Error::InvalidOptions("expected failure".to_owned()))
+            })
+            .build()?;
+        let task = app.spawn(RETRY_PROBE, json!({})).max_attempts(1).await?;
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+        assert!(matches!(task.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
+
+        let mut rolled_back = pool.begin().await?;
+        sqlx::query("INSERT INTO application_retries (id) VALUES (1)")
+            .execute(&mut *rolled_back)
+            .await?;
+        task.retry_in(&mut rolled_back).await?;
+        rolled_back.rollback().await?;
+
+        let application_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM application_retries")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(application_rows, 0);
+        assert!(matches!(task.snapshot().await?, Some(TaskSnapshot::Failed { .. })));
+
+        let mut committed = pool.begin().await?;
+        sqlx::query("INSERT INTO application_retries (id) VALUES (2)")
+            .execute(&mut *committed)
+            .await?;
+        task.retry_in(&mut committed).await?;
+        committed.commit().await?;
+
+        let application_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM application_retries")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(application_rows, 1);
+        assert!(matches!(task.snapshot().await?, Some(TaskSnapshot::Pending)));
 
         app.delete().await?;
         Ok(())

@@ -118,7 +118,7 @@ The returned task keeps the output type attached, so results and snapshots remai
 
 ## Durable workflows
 
-### Transactional submission
+### Transactional task mutations
 
 Awaiting `queue.spawn(...)` submits through the queue's shared pool. When application state and
 durable work must commit atomically, submit the same builder through a caller-owned SQLx
@@ -137,7 +137,8 @@ tx.commit().await?;
 ```
 
 The task becomes visible when the transaction commits. Rolling the transaction back also rolls
-back the task spawn.
+back the task spawn. Explicit cancellation and manual retry can participate in the same application
+transaction with `task.cancel_in(&mut tx)` and `task.retry_in(&mut tx)`.
 
 ### Idempotent submission
 

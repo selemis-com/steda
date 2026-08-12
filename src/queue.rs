@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Row, postgres::PgRow};
 
 use crate::{
-    db::{duration_seconds, fetch_task_result_snapshot},
+    db::{duration_seconds, fetch_task_result_snapshot, fetch_task_result_snapshot_with},
     error::{Error, Result, map_sqlx_error},
     execution::SharedExecutionService,
     metrics::QueueMetrics,
@@ -194,16 +194,29 @@ impl Queue {
         Ok(SpawnResult { task_id: row.get("task_id"), created: row.get("created") })
     }
 
-    /// Cancel a task by ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the database cancellation fails.
+    /// Cancel a task by ID through this queue's pool.
     pub(crate) async fn cancel_task(&self, task_id: TaskId) -> Result<()> {
+        self.cancel_task_with(task_id, &self.pool).await
+    }
+
+    /// Cancel a task by ID through a caller-owned connection.
+    pub(crate) async fn cancel_task_on(
+        &self,
+        task_id: TaskId,
+        connection: &mut PgConnection,
+    ) -> Result<()> {
+        self.cancel_task_with(task_id, connection).await
+    }
+
+    /// Cancel a task by ID through one SQLx executor.
+    async fn cancel_task_with<'e, E>(&self, task_id: TaskId, executor: E) -> Result<()>
+    where
+        E: Executor<'e, Database = Postgres>,
+    {
         sqlx::query("SELECT steda.cancel_task($1, $2)")
             .bind(&self.name)
             .bind(task_id)
-            .execute(&self.pool)
+            .execute(executor)
             .await?;
 
         Ok(())
@@ -332,20 +345,46 @@ impl Queue {
         Ok(())
     }
 
-    /// Retry a terminally failed logical task with one additional attempt.
+    /// Verify a durable typed reference through a caller-owned connection.
+    pub(crate) async fn ensure_task_ref_on(
+        &self,
+        task_name: &str,
+        task_id: TaskId,
+        connection: &mut PgConnection,
+    ) -> Result<()> {
+        fetch_task_result_snapshot_with(connection, &self.name, task_name, task_id)
+            .await?
+            .ok_or(Error::TaskNotFound(task_id))?;
+        Ok(())
+    }
+
+    /// Retry a terminally failed logical task with one additional attempt through this queue's pool.
+    pub(crate) async fn retry_task(&self, task_id: TaskId) -> Result<RunId> {
+        self.retry_task_with(task_id, &self.pool).await
+    }
+
+    /// Retry a terminally failed logical task through a caller-owned connection.
+    pub(crate) async fn retry_task_on(
+        &self,
+        task_id: TaskId,
+        connection: &mut PgConnection,
+    ) -> Result<RunId> {
+        self.retry_task_with(task_id, connection).await
+    }
+
+    /// Retry a terminally failed logical task through one SQLx executor.
     ///
     /// The logical task ID and previously committed checkpoints are preserved. The effective
     /// attempt budget grows to admit the new run, while the original spawn-time attempt budget
     /// remains unchanged for later idempotency comparison.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the task is missing, is not failed, or the database retry fails.
-    pub(crate) async fn retry_task(&self, task_id: TaskId) -> Result<RunId> {
+    async fn retry_task_with<'e, E>(&self, task_id: TaskId, executor: E) -> Result<RunId>
+    where
+        E: Executor<'e, Database = Postgres>,
+    {
         let run_id: RunId = sqlx::query_scalar("SELECT steda.retry_task($1, $2)")
             .bind(&self.name)
             .bind(task_id)
-            .fetch_one(&self.pool)
+            .fetch_one(executor)
             .await?;
 
         Ok(run_id)

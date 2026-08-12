@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde_json::Value;
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{Executor, PgPool, Postgres, Row, postgres::PgRow};
 use tokio::time::{Instant, sleep};
 
 use crate::{
@@ -114,6 +114,19 @@ pub(crate) async fn fetch_task_result_snapshot(
     task_name: &str,
     task_id: TaskId,
 ) -> Result<Option<TaskResultSnapshot>> {
+    fetch_task_result_snapshot_with(pool, queue_name, task_name, task_id).await
+}
+
+/// Fetches the current task result snapshot through one SQLx executor.
+pub(crate) async fn fetch_task_result_snapshot_with<'e, E>(
+    executor: E,
+    queue_name: &str,
+    task_name: &str,
+    task_id: TaskId,
+) -> Result<Option<TaskResultSnapshot>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT task_name, state, result, failure_reason
@@ -122,7 +135,7 @@ pub(crate) async fn fetch_task_result_snapshot(
     )
     .bind(queue_name)
     .bind(task_id)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     let Some(row) = row else {
