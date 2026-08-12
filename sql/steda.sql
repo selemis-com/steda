@@ -4,7 +4,7 @@
 -- installation artifact. The merged file can be applied to a fresh database and
 -- reapplied when upgrading an existing Steda installation, for example:
 --
---     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/steda.sql
+--   psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f sql/steda.sql
 --
 -- Edit the ordered migrations rather than the generated merged file.
 --

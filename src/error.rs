@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::types::TaskId;
 
-/// Result type used by the queue crate.
+/// Result type used by Steda.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors returned by the queue handle, worker, and task context.
