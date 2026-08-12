@@ -139,6 +139,7 @@ BEGIN
                 CHECK (attempts >= 0),
             last_attempt_run UUID NOT NULL,
             cancelled_at TIMESTAMPTZ,
+            CHECK (state <> 'cancelled' OR cancelled_at IS NOT NULL),
             idempotency_key TEXT UNIQUE
                 CHECK (
                     idempotency_key IS NULL
@@ -176,6 +177,8 @@ BEGIN
             result JSONB,
             failure_reason JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT steda.current_time(),
+            CHECK (state <> 'completed' OR (completed_at IS NOT NULL AND result IS NOT NULL)),
+            CHECK (state <> 'failed' OR (failed_at IS NOT NULL AND failure_reason IS NOT NULL)),
             CHECK (
                 (
                     state = 'running'
@@ -216,7 +219,7 @@ BEGIN
             task_id UUID NOT NULL REFERENCES steda.%I(id) ON DELETE CASCADE,
             name TEXT NOT NULL
                 CHECK (name !~ '^[[:space:]]*$' AND octet_length(name) <= 1024),
-            state JSONB,
+            state JSONB NOT NULL,
             PRIMARY KEY (task_id, name)
         )
         $query$,

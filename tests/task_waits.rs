@@ -23,6 +23,8 @@ mod tests {
 
     const SAME_QUEUE_WAIT: Task<TaskRef<Value, Value>, Value> = Task::new("same-queue-wait");
 
+    const REPLAY_NAME_PARENT: Task<TaskRef<Value, Value>, Value> = Task::new("replay-name-parent");
+
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn cross_queue_wait_is_reused_from_checkpoint_after_retry(pool: PgPool) -> Result<()> {
         let child_name = unique_queue("wait_child");
@@ -65,6 +67,62 @@ mod tests {
         run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;
 
         assert_eq!(parent.result().await?, json!({"value": 42}));
+
+        parent_queue.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn replayed_task_wait_keeps_concrete_task_name(pool: PgPool) -> Result<()> {
+        let child_name = unique_queue("wait_name_child");
+        let parent_name = unique_queue("wait_name_parent");
+        let steda = Steda::from_pool(pool);
+        let child_queue = steda.queue(child_name)?;
+        let parent_queue = steda.queue(parent_name)?;
+        child_queue.create().await?;
+        parent_queue.create().await?;
+
+        let child_worker = child_queue
+            .worker()
+            .task(CHILD, async |_params: Value, _ctx| Ok(json!({"value": 42})))
+            .build()?;
+        let child = child_queue.spawn(CHILD, json!({})).await?;
+        run_worker_for_claims(&child_worker, child_queue.metrics(), 1).await?;
+
+        let parent_worker = parent_queue
+            .worker()
+            .task(REPLAY_NAME_PARENT, async |child: TaskRef<Value, Value>, ctx: TaskContext| {
+                if ctx.attempt() == 1 {
+                    let _ = ctx.await_task(&child).await?;
+                    return Err(Error::InvalidOptions(
+                        "retry after durable child result".to_owned(),
+                    ));
+                }
+
+                let mut encoded = serde_json::to_value(&child)?;
+                encoded["taskName"] = json!("different-child-task");
+                let mismatched: TaskRef<Value, Value> = serde_json::from_value(encoded)?;
+                let error = ctx
+                    .await_task(&mismatched)
+                    .await
+                    .expect_err("replayed wait must retain the original task name");
+                Ok(json!({
+                    "task_name_mismatch": matches!(error, Error::TaskNameMismatch { .. })
+                }))
+            })
+            .build()?;
+
+        let parent = parent_queue
+            .spawn(REPLAY_NAME_PARENT, child.task_ref())
+            .max_attempts(2)
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
+            .await?;
+
+        run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;
+        child_queue.delete().await?;
+        run_worker_for_claims(&parent_worker, parent_queue.metrics(), 1).await?;
+
+        assert_eq!(parent.result().await?, json!({"task_name_mismatch": true}));
 
         parent_queue.delete().await?;
         Ok(())

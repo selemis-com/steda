@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sqlx::{PgPool, Row};
 use time::{OffsetDateTime, SignedDuration};
 use tokio::sync::Mutex as AsyncMutex;
@@ -29,6 +29,19 @@ const STEP_PREFIX: &str = "$step:";
 const SLEEP_PREFIX: &str = "$sleep:";
 /// Internal namespace for cross-task result waits.
 const TASK_WAIT_PREFIX: &str = "$await-task:";
+
+/// Persisted payload for one completed cross-task wait.
+///
+/// The task name is stored alongside the decoded output so replay can keep enforcing the
+/// concrete task identity even after the child task itself has been removed by retention.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskWaitCheckpoint<Output> {
+    /// Persisted concrete task name.
+    task_name: String,
+    /// Decoded child output.
+    output: Output,
+}
 
 /// Durable execution context for the currently claimed task attempt.
 ///
@@ -279,15 +292,28 @@ impl TaskContext {
         let checkpoint_name = format!("{TASK_WAIT_PREFIX}{}:{}", task.queue_name(), task.task_id());
         let pool = self.inner.pool.clone();
         let queue_name = task.queue_name().to_owned();
-        let task_name = task.task_name().to_owned();
+        let expected_task_name = task.task_name().to_owned();
+        let task_name = expected_task_name.clone();
         let task_id = task.task_id();
-        self.checkpoint(&checkpoint_name, async move || {
-            let snapshot =
-                await_task_result_snapshot(&pool, &queue_name, &task_name, task_id, timeout)
-                    .await?;
-            decode_result(snapshot)
-        })
-        .await
+        let checkpoint: TaskWaitCheckpoint<Output> = self
+            .checkpoint(&checkpoint_name, async move || {
+                let snapshot =
+                    await_task_result_snapshot(&pool, &queue_name, &task_name, task_id, timeout)
+                        .await?;
+                let output = decode_result(snapshot)?;
+                Ok(TaskWaitCheckpoint { task_name, output })
+            })
+            .await?;
+
+        if checkpoint.task_name != expected_task_name {
+            return Err(Error::TaskNameMismatch {
+                task_id,
+                expected: expected_task_name,
+                actual: checkpoint.task_name,
+            });
+        }
+
+        Ok(checkpoint.output)
     }
 
     /// Execute or replay one checkpoint under an already-namespaced persisted identity.

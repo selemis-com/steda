@@ -196,7 +196,7 @@ mod tests {
             .fetch_one(&mut *connection)
             .await?;
         let complete_run = format!(
-            "UPDATE steda.{runs_table} SET state = 'completed', completed_at = steda.current_time() WHERE id = $1"
+            "UPDATE steda.{runs_table} SET state = 'completed', completed_at = steda.current_time(), result = 'null'::jsonb WHERE id = $1"
         );
         sqlx::query(AssertSqlSafe(complete_run)).bind(run_id).execute(&mut *connection).await?;
         let complete_task =

@@ -12,7 +12,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use serde_json::{Value, json};
-    use sqlx::{AssertSqlSafe, PgPool};
+    use sqlx::PgPool;
     use steda::{Error, Result, Steda, Task, TaskId, TaskRef, TaskSnapshot, TaskState};
     use tokio::{
         sync::{Notify, Semaphore, oneshot},
@@ -130,47 +130,6 @@ mod tests {
         }
 
         spawned.cancel().await?;
-        app.delete().await?;
-        Ok(())
-    }
-
-    #[sqlx::test(migrations = "./sql/migrations")]
-    async fn task_snapshot_rejects_missing_terminal_payloads(pool: PgPool) -> Result<()> {
-        let queue = unique_queue("result_corrupt_terminal_payload");
-        let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
-        app.create().await?;
-
-        let worker = app
-            .worker()
-            .task(RESULT_PROBE, async |_params: Value, _ctx| Ok(json!({"ok": true})))
-            .build()?;
-        let task = app.spawn(RESULT_PROBE, json!({})).await?;
-        run_worker_for_claims(&worker, app.metrics(), 1).await?;
-
-        let runs = format!("steda.runs_{queue}");
-        let tasks = format!("steda.tasks_{queue}");
-        sqlx::query(AssertSqlSafe(format!(
-            "UPDATE {runs} SET result = NULL WHERE task_id = $1 AND state = 'completed'"
-        )))
-        .bind(task.task_id())
-        .execute(&pool)
-        .await?;
-        let error = task.snapshot().await.expect_err("completed task without result must fail");
-        assert!(error.to_string().contains("has no persisted result"));
-
-        sqlx::query(AssertSqlSafe(format!(
-            "UPDATE {runs} SET state = 'failed', completed_at = NULL, failed_at = steda.current_time(), failure_reason = NULL WHERE task_id = $1"
-        )))
-        .bind(task.task_id())
-        .execute(&pool)
-        .await?;
-        sqlx::query(AssertSqlSafe(format!("UPDATE {tasks} SET state = 'failed' WHERE id = $1")))
-            .bind(task.task_id())
-            .execute(&pool)
-            .await?;
-        let error = task.snapshot().await.expect_err("failed task without failure must fail");
-        assert!(error.to_string().contains("has no persisted failure"));
-
         app.delete().await?;
         Ok(())
     }
