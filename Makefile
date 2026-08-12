@@ -191,7 +191,12 @@ about: ## Generate the `THIRD_PARTY_NOTICES.md` file.
 
 .PHONY: sql
 sql: ## Generate the `sql/steda.sql` file.
-	cat sql/migrations/*.sql > sql/steda.sql
+	@first=1; \
+	for file in sql/migrations/*.sql; do \
+		if [ "$$first" -eq 0 ]; then printf '\n'; fi; \
+		cat "$$file"; \
+		first=0; \
+	done > sql/steda.sql
 
 .PHONY: check
 check: ## Check all crates and targets.
