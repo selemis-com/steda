@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo-light.svg">
-  <img alt="Steda" src=".github/assets/logo-light.svg" width="100%" height="140px">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/selemis-com/steda/master/.github/assets/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/selemis-com/steda/master/.github/assets/logo-light.svg">
+  <img alt="Steda" src="https://raw.githubusercontent.com/selemis-com/steda/master/.github/assets/logo-light.svg" width="100%" height="140px">
 </picture>
 
 <p align="center">

@@ -16,9 +16,11 @@ include = [
   "/sql/**",
   "/examples/**",
   "/README.md",
+  "/CONTRIBUTING.md",
+  "/SECURITY.md",
   "/LICENSE-APACHE",
   "/LICENSE-MIT",
-  "/THIRD_PARTY_NOTICES.md",
+  "/THIRD_PARTY_NOTICES.md"
 ]
 
 [lints.rust]
