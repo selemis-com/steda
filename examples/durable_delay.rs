@@ -51,29 +51,27 @@ async fn main() -> Result<()> {
         .worker()
         .task(SEND_TRIAL_REMINDER, async |input: SendTrialReminderInput, ctx: TaskContext| {
             ctx.step(RECORD_TRIAL, async || {
-                println!("recorded trial start for {}", input.account_id);
+                println!("trial started for {}", input.account_id);
+                println!("reminder scheduled with a durable 2-second delay");
                 Ok(())
             })
             .await?;
 
-            println!("waiting durably before reminding {}", input.account_id);
             ctx.sleep_for(REMINDER_DELAY, Duration::from_secs(2)).await?;
 
-            println!("sending reminder for {}", input.account_id);
+            println!("task resumed after the durable delay");
+            println!("sending trial reminder to {}", input.account_id);
             Ok(ReminderSent { account_id: input.account_id, attempt: ctx.attempt() })
         })
         .build()?;
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn(
-            SEND_TRIAL_REMINDER,
-            SendTrialReminderInput { account_id: common::unique_key("account")? },
-        )
+        .spawn(SEND_TRIAL_REMINDER, SendTrialReminderInput { account_id: "ACCT-1001".to_owned() })
         .await?;
 
     let sent = task.result_with_timeout(Duration::from_secs(10)).await?;
-    println!("reminder for {} completed on attempt {}", sent.account_id, sent.attempt);
+    println!("reminder completed for {} on attempt {}", sent.account_id, sent.attempt);
 
     worker.stop().await?;
     Ok(())

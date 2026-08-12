@@ -61,21 +61,30 @@ async fn ship_order(
     let reservation_id = ctx
         .step(RESERVE_INVENTORY, async || {
             reservation_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(format!("reservation:{}", input.order_id))
+            println!("reserving inventory for {}", input.order_id);
+            Ok("RES-1001".to_owned())
         })
         .await?;
 
     let payment_id = ctx
         .step(CHARGE_PAYMENT, async || {
             charge_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(format!("charge:{}:{}", input.order_id, input.amount_cents))
+            println!(
+                "capturing payment of €{}.{:02}",
+                input.amount_cents / 100,
+                input.amount_cents % 100
+            );
+            Ok("PAY-1001".to_owned())
         })
         .await?;
 
     // Fail only after both checkpoints commit so the retry must replay them.
     if ctx.attempt() == 1 {
+        println!("shipping attempt 1 failed after both checkpoints committed");
         return Err(Error::Other("label printer temporarily unavailable".to_owned()));
     }
+
+    println!("shipping attempt 2 replayed reservation and payment checkpoints");
 
     Ok(Shipment { order_id: input.order_id, reservation_id, payment_id })
 }
@@ -101,10 +110,7 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn(
-            SHIP_ORDER,
-            ShipOrderInput { order_id: common::unique_key("order")?, amount_cents: 14_950 },
-        )
+        .spawn(SHIP_ORDER, ShipOrderInput { order_id: "ORD-1001".to_owned(), amount_cents: 14_950 })
         .max_attempts(2)
         .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
         .await?;
@@ -114,10 +120,9 @@ async fn main() -> Result<()> {
     assert_eq!(reservations.load(Ordering::SeqCst), 1);
     assert_eq!(charges.load(Ordering::SeqCst), 1);
 
-    println!(
-        "{} shipped with {} and {}",
-        shipment.order_id, shipment.reservation_id, shipment.payment_id
-    );
+    println!("order {} shipped", shipment.order_id);
+    println!("  reservation: {}", shipment.reservation_id);
+    println!("  payment: {}", shipment.payment_id);
 
     worker.stop().await?;
     Ok(())

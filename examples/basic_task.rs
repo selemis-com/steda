@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         .spawn(
             RENDER_INVOICE,
             RenderInvoiceInput {
-                invoice_number: common::unique_key("INV")?,
+                invoice_number: "INV-1001".to_owned(),
                 subtotal_cents: 12_500,
                 tax_cents: 2_625,
             },
@@ -69,12 +69,8 @@ async fn main() -> Result<()> {
         .await?;
 
     let invoice = task.result_with_timeout(Duration::from_secs(10)).await?;
-    println!(
-        "{} rendered with total €{}.{:02}",
-        invoice.invoice_number,
-        invoice.total_cents / 100,
-        invoice.total_cents % 100
-    );
+    println!("invoice {} rendered", invoice.invoice_number);
+    println!("total: €{}.{:02}", invoice.total_cents / 100, invoice.total_cents % 100);
 
     worker.stop().await?;
     Ok(())

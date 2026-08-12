@@ -86,9 +86,7 @@ where
     fn call(&mut self, request: Request) -> Self::Future {
         // Copy observation metadata before passing ownership of the request to the inner service.
         let task_name = request.task_name().to_owned();
-        let queue_name = request.queue_name().to_owned();
         let attempt = request.attempt();
-        let run_id = request.run_id();
         let started = Instant::now();
         let future = self.inner.call(request);
         let completed_calls = Arc::clone(&self.completed_calls);
@@ -97,9 +95,9 @@ where
             let result = future.await;
             let _ = completed_calls.fetch_add(1, Ordering::Relaxed);
             println!(
-                "tower: queue={queue_name} task={task_name} run={run_id} attempt={attempt} ok={} handler_us={}",
-                result.is_ok(),
-                started.elapsed().as_micros()
+                "middleware observed {task_name} attempt {attempt}: {} in {} ms",
+                if result.is_ok() { "succeeded" } else { "failed" },
+                started.elapsed().as_millis()
             );
             result
         })
@@ -132,13 +130,13 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let task = queue
-        .spawn(RENDER_PREVIEW, RenderPreviewInput { document_id: common::unique_key("document")? })
+        .spawn(RENDER_PREVIEW, RenderPreviewInput { document_id: "document-1001".to_owned() })
         .await?;
     let output = task.result_with_timeout(Duration::from_secs(10)).await?;
 
     worker.stop().await?;
-    println!("result: {}", output.preview_path);
-    println!("tower calls observed: {}", completed_calls.load(Ordering::Relaxed));
+    println!("preview created: {}", output.preview_path);
+    println!("middleware calls: {}", completed_calls.load(Ordering::Relaxed));
 
     Ok(())
 }

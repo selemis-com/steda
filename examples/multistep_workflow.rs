@@ -73,29 +73,26 @@ const CREATE_SHIPMENT: Step<Shipment> = Step::new("create-shipment");
 async fn fulfill_order(input: FulfillOrderInput, ctx: TaskContext) -> Result<FulfillOrderOutput> {
     let reservation = ctx
         .step(RESERVE_INVENTORY, async || {
-            Ok(Reservation { reservation_id: format!("reservation:{}", input.order_id) })
+            println!("reserving inventory for {}", input.order_id);
+            Ok(Reservation { reservation_id: "RES-1001".to_owned() })
         })
         .await?;
 
     let payment = ctx
         .step(CAPTURE_PAYMENT, async || {
-            Ok(Payment {
-                payment_id: format!(
-                    "payment:{}:{}:{}",
-                    input.order_id, reservation.reservation_id, input.amount_cents
-                ),
-            })
+            println!(
+                "capturing payment of €{}.{:02}",
+                input.amount_cents / 100,
+                input.amount_cents % 100
+            );
+            Ok(Payment { payment_id: "PAY-1001".to_owned() })
         })
         .await?;
 
     let shipment = ctx
         .step(CREATE_SHIPMENT, async || {
-            Ok(Shipment {
-                tracking_number: format!(
-                    "tracking:{}:{}",
-                    reservation.reservation_id, payment.payment_id
-                ),
-            })
+            println!("creating shipment");
+            Ok(Shipment { tracking_number: "TRACK-1001".to_owned() })
         })
         .await?;
 
@@ -120,15 +117,15 @@ async fn main() -> Result<()> {
     let task = queue
         .spawn(
             FULFILL_ORDER,
-            FulfillOrderInput { order_id: common::unique_key("order")?, amount_cents: 14_950 },
+            FulfillOrderInput { order_id: "ORD-1001".to_owned(), amount_cents: 14_950 },
         )
         .await?;
 
     let result = task.result_with_timeout(Duration::from_secs(10)).await?;
-    println!(
-        "{} fulfilled with {}, {}, and {}",
-        result.order_id, result.reservation_id, result.payment_id, result.tracking_number
-    );
+    println!("order {} fulfilled", result.order_id);
+    println!("  reservation: {}", result.reservation_id);
+    println!("  payment: {}", result.payment_id);
+    println!("  tracking: {}", result.tracking_number);
 
     worker.stop().await?;
     Ok(())

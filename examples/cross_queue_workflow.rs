@@ -79,6 +79,7 @@ async fn complete_order(
     let email_address = input.email.clone();
     let receipt_queue = child_queue.clone();
     let child_order_id = order_id.clone();
+    let child_idempotency_key = format!("receipt:{}", ctx.task_id());
     // Checkpoint child creation so a parent retry cannot create a second logical child.
     let child = ctx
         .step(SPAWN_RECEIPT, async move || {
@@ -87,7 +88,7 @@ async fn complete_order(
                     EMAIL_RECEIPT,
                     EmailReceiptInput { order_id: child_order_id.clone(), address: email_address },
                 )
-                .idempotency_key(format!("receipt:{child_order_id}"))
+                .idempotency_key(child_idempotency_key)
                 .await?;
             Ok(child.task_ref())
         })
@@ -95,10 +96,12 @@ async fn complete_order(
 
     // Simulate a transient parent failure after the child reference is durable.
     if ctx.attempt() == 1 {
+        println!("parent attempt 1 checkpointed the child task, then simulated a restart");
         return Err(Error::Other("order worker restarted after spawning receipt".to_owned()));
     }
 
     // The retry recovered the same typed child reference from the checkpoint above.
+    println!("parent attempt 2 reused the checkpointed child task");
     let receipt = ctx.await_task(&child).timeout(Duration::from_secs(10)).await?;
 
     Ok(CompleteOrderOutput { order_id: input.order_id, receipt_message_id: receipt.message_id })
@@ -121,8 +124,8 @@ async fn main() -> Result<()> {
             let worker_receipt_runs = Arc::clone(&worker_receipt_runs);
             async move {
                 worker_receipt_runs.fetch_add(1, Ordering::SeqCst);
-                println!("sending receipt for {} to {}", input.order_id, input.address);
-                Ok(EmailReceiptOutput { message_id: format!("msg:{}", input.order_id) })
+                println!("sending one receipt for {} to {}", input.order_id, input.address);
+                Ok(EmailReceiptOutput { message_id: "MSG-1001".to_owned() })
             }
         })
         .build()?;
@@ -135,11 +138,13 @@ async fn main() -> Result<()> {
         .build()?;
     let orders_worker = RunningWorker::start(orders_worker);
 
-    let order_id = common::unique_key("order")?;
     let task = orders
         .spawn(
             COMPLETE_ORDER,
-            CompleteOrderInput { order_id, email: "buyer@example.invalid".to_owned() },
+            CompleteOrderInput {
+                order_id: "ORD-1001".to_owned(),
+                email: "buyer@example.invalid".to_owned(),
+            },
         )
         .max_attempts(2)
         .retry_strategy(RetryStrategy::fixed(Duration::from_millis(250)))
@@ -147,7 +152,9 @@ async fn main() -> Result<()> {
 
     let completed = task.result_with_timeout(Duration::from_secs(15)).await?;
     assert_eq!(receipt_runs.load(Ordering::SeqCst), 1);
-    println!("{} completed after receipt {}", completed.order_id, completed.receipt_message_id);
+    println!("order {} completed", completed.order_id);
+    println!("receipt: {}", completed.receipt_message_id);
+    println!("receipt task executions: {}", receipt_runs.load(Ordering::SeqCst));
 
     orders_worker.stop().await?;
     email_worker.stop().await?;

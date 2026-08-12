@@ -47,11 +47,12 @@ async fn main() -> Result<()> {
     let worker = queue
         .worker()
         .task(DELIVER_DOCUMENT, async |input: DeliverDocumentInput, ctx: TaskContext| {
-            println!("attempt {} for {}", ctx.attempt(), input.document_id);
-
             if ctx.attempt() < 3 {
+                println!("delivery attempt {}: remote service unavailable", ctx.attempt());
                 return Err(Error::Other("remote service temporarily unavailable".to_owned()));
             }
+
+            println!("delivery attempt {}: succeeded", ctx.attempt());
 
             Ok(DeliveryReceipt {
                 document_id: input.document_id,
@@ -67,7 +68,7 @@ async fn main() -> Result<()> {
         .spawn(
             DELIVER_DOCUMENT,
             DeliverDocumentInput {
-                document_id: common::unique_key("statement")?,
+                document_id: "STATEMENT-1001".to_owned(),
                 destination: "archive@example.invalid".to_owned(),
             },
         )
@@ -76,10 +77,8 @@ async fn main() -> Result<()> {
         .await?;
 
     let receipt = task.result_with_timeout(Duration::from_secs(10)).await?;
-    println!(
-        "{} delivered to {} on attempt {}",
-        receipt.document_id, receipt.destination, receipt.delivered_on_attempt
-    );
+    println!("{} delivered to {}", receipt.document_id, receipt.destination);
+    println!("completed on attempt {}", receipt.delivered_on_attempt);
 
     worker.stop().await?;
     Ok(())

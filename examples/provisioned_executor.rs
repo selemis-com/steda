@@ -77,12 +77,8 @@ impl TaskExecutor<AgentTurnInput, AgentTurnOutput> for SandboxExecutor {
     ) -> impl Future<Output = Result<AgentTurnOutput>> + Send {
         let environment_id = self.next_environment_id.fetch_add(1, Ordering::Relaxed);
         let attempt = context.attempt();
-        let run_id = context.run_id();
-
         async move {
-            println!(
-                "provisioning environment {environment_id} for run {run_id} (attempt {attempt})"
-            );
+            println!("attempt {attempt}: provisioning environment {environment_id}");
 
             // This durable preparation belongs to the logical task, not the
             // ephemeral environment. On the second attempt its body is skipped.
@@ -99,9 +95,11 @@ impl TaskExecutor<AgentTurnInput, AgentTurnOutput> for SandboxExecutor {
             // fails this normal run and schedules another attempt; the executor
             // itself does not implement retry logic.
             if attempt == 1 {
-                println!("environment {environment_id} exited unexpectedly");
+                println!("attempt 1: environment {environment_id} exited unexpectedly");
                 return Err(Error::Other("provisioned runtime exited unexpectedly".to_owned()));
             }
+
+            println!("attempt 2: reused the durable prepared input");
 
             // Stand in for launching and waiting on a real isolated runtime.
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -111,6 +109,7 @@ impl TaskExecutor<AgentTurnInput, AgentTurnOutput> for SandboxExecutor {
                 response: format!("processed: {}", prepared.prompt),
             };
 
+            println!("environment {environment_id} completed successfully");
             println!("destroying environment {environment_id}");
             Ok(output)
         }
@@ -133,7 +132,7 @@ async fn main() -> Result<()> {
         .spawn(
             AGENT_TURN,
             AgentTurnInput {
-                session_id: common::unique_key("session")?,
+                session_id: "SESSION-1001".to_owned(),
                 prompt: "Summarize the attached repository changes".to_owned(),
             },
         )
@@ -142,10 +141,8 @@ async fn main() -> Result<()> {
         .await?;
 
     let output = task.result_with_timeout(Duration::from_secs(10)).await?;
-    println!(
-        "{} completed in environment {}: {}",
-        output.session_id, output.environment_id, output.response
-    );
+    println!("session {} completed in environment {}", output.session_id, output.environment_id);
+    println!("response: {}", output.response);
 
     worker.stop().await?;
     Ok(())

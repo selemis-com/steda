@@ -63,10 +63,7 @@ async fn main() -> Result<()> {
     let worker = RunningWorker::start(worker);
 
     let successful = queue
-        .spawn(
-            METRIC_PROBE,
-            MetricProbeInput { label: "successful attempt".to_owned(), should_fail: false },
-        )
+        .spawn(METRIC_PROBE, MetricProbeInput { label: "completed".to_owned(), should_fail: false })
         .await?;
     let failing = queue
         .spawn(
@@ -78,10 +75,10 @@ async fn main() -> Result<()> {
         .await?;
 
     let output = successful.result_with_timeout(Duration::from_secs(10)).await?;
-    println!("completed: {}", output.label);
+    println!("successful task: {}", output.label);
 
     match failing.result_with_timeout(Duration::from_secs(10)).await {
-        Err(Error::TaskFailed { failure }) => println!("failed as expected: {failure}"),
+        Err(Error::TaskFailed { .. }) => println!("failing task: failed as expected"),
         Err(error) => return Err(error),
         Ok(output) => {
             return Err(Error::Other(format!("expected failure, got success: {}", output.label)));
@@ -91,17 +88,20 @@ async fn main() -> Result<()> {
     // Stop before reading the final snapshot so no additional task execution can change it.
     worker.stop().await?;
 
-    println!("claimed runs: {}", metrics.claimed_runs());
-    println!("claim errors: {}", metrics.claim_errors());
-    println!("executions: {}", metrics.executions());
-    println!("worker view of executions: {}", worker_metrics.executions());
-    println!("completed executions: {}", metrics.completed_executions());
-    println!("failed executions: {}", metrics.failed_executions());
-    println!("lease-lost executions: {}", metrics.lease_lost_executions());
-    println!("cancelled executions: {}", metrics.cancelled_executions());
-    println!("suspended executions: {}", metrics.suspended_executions());
-    println!("unhandled executions: {}", metrics.unhandled_executions());
-    println!("cumulative execution time: {} ns", metrics.execution_duration_nanoseconds());
+    assert_eq!(worker_metrics.executions(), metrics.executions());
+
+    println!("queue metrics:");
+    println!("  claimed runs: {}", metrics.claimed_runs());
+    println!("  claim errors: {}", metrics.claim_errors());
+    println!("  executions: {}", metrics.executions());
+    println!("  completed: {}", metrics.completed_executions());
+    println!("  failed: {}", metrics.failed_executions());
+    println!("  lease lost: {}", metrics.lease_lost_executions());
+    println!("  cancelled: {}", metrics.cancelled_executions());
+    println!("  suspended: {}", metrics.suspended_executions());
+    println!("  unhandled: {}", metrics.unhandled_executions());
+    let execution_duration = Duration::from_nanos(metrics.execution_duration_nanoseconds());
+    println!("  cumulative execution time: {} µs", execution_duration.as_micros());
 
     Ok(())
 }

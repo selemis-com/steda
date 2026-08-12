@@ -83,7 +83,7 @@ test-examples: ## Build and run all runnable examples.
 	@set -eu; \
 	examples='$(sort $(patsubst examples/%.rs,%,$(wildcard examples/*.rs)))'; \
 	for example in $$examples; do \
-		echo "==> Running example: $$example"; \
+		printf "\n==> Running example: %s\n" "$$example"; \
 		cargo run \
 			--quiet \
 			--example "$$example" \

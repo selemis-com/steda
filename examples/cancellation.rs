@@ -34,14 +34,14 @@ async fn main() -> Result<()> {
             move |(), _ctx: TaskContext| {
                 let manual_started = Arc::clone(&manual_started);
                 async move {
-                    println!("manual task started");
+                    println!("manual cancellation: handler started");
                     manual_started.notify_one();
                     future::pending::<Result<()>>().await
                 }
             }
         })
         .task(DEADLINE_CANCELLATION, async |(), _ctx: TaskContext| {
-            println!("deadline-limited task started");
+            println!("deadline cancellation: handler started");
             future::pending::<Result<()>>().await
         })
         .build()?;
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     manual.cancel().await?;
     match manual.result_with_timeout(Duration::from_secs(5)).await {
-        Err(Error::Cancelled) => println!("manual task cancelled explicitly"),
+        Err(Error::Cancelled) => println!("manual cancellation: task cancelled"),
         Err(error) => return Err(error),
         Ok(()) => return Err(Error::Other("cancelled task unexpectedly completed".to_owned())),
     }
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
         .await?;
 
     match deadline.result_with_timeout(Duration::from_secs(5)).await {
-        Err(Error::Cancelled) => println!("deadline-limited task cancelled automatically"),
+        Err(Error::Cancelled) => println!("deadline cancellation: task cancelled automatically"),
         Err(error) => return Err(error),
         Ok(()) => {
             return Err(Error::Other("deadline-limited task unexpectedly completed".to_owned()));
