@@ -20,15 +20,15 @@ include = [
   "/SECURITY.md",
   "/LICENSE-APACHE",
   "/LICENSE-MIT",
-  "/THIRD_PARTY_NOTICES.md"
+  "/THIRD_PARTY_NOTICES.md",
 ]
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = [
-    "-Zunstable-options",
-    "--generate-link-to-definition",
-    "--show-type-layout",
+  "-Zunstable-options",
+  "--generate-link-to-definition",
+  "--show-type-layout",
 ]
 
 [lints.rust]
