@@ -102,20 +102,20 @@ $$;
 --
 -- A missing queue produces no row; higher-level APIs may translate that into a
 -- domain error.
-CREATE OR REPLACE FUNCTION steda.get_queue_policy(queue_name text)
+CREATE OR REPLACE FUNCTION steda.get_queue_policy(requested_queue_name text)
 RETURNS TABLE (
-    name text,
+    queue_name text,
     cleanup_ttl interval,
     cleanup_limit integer
 )
 LANGUAGE sql
 AS $$
     SELECT
-        queue.name,
+        queue.name AS queue_name,
         queue.cleanup_ttl,
         queue.cleanup_limit
     FROM steda.queues queue
-    WHERE queue.name = steda.validate_queue_name(queue_name);
+    WHERE queue.name = steda.validate_queue_name(requested_queue_name);
 $$;
 
 -- Update the persisted cleanup policy for one queue.

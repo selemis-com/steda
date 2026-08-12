@@ -108,7 +108,7 @@ impl Steda {
 
         let rows = sqlx::query(
             r#"
-            SELECT name, tasks_deleted
+            SELECT queue_name, tasks_deleted
             FROM steda.cleanup_all_queues(NULL::text)
             "#,
         )
@@ -121,7 +121,7 @@ impl Steda {
                 let tasks_deleted = u32::try_from(tasks_deleted).map_err(|_| {
                     Error::Other("PostgreSQL returned a negative cleanup count".to_owned())
                 })?;
-                Ok(QueueCleanup { queue_name: row.get("name"), tasks_deleted })
+                Ok(QueueCleanup { queue_name: row.get("queue_name"), tasks_deleted })
             })
             .collect()
     }

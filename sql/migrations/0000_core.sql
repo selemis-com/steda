@@ -32,6 +32,14 @@
 -- Establish the shared schema, logical queue registry, canonical database
 -- clock, and queue-name rules used by all later sections.
 
+DO $$
+BEGIN
+    IF current_setting('server_version_num')::integer < 180000 THEN
+        RAISE EXCEPTION 'Steda requires PostgreSQL 18 or newer';
+    END IF;
+END;
+$$;
+
 CREATE SCHEMA IF NOT EXISTS steda;
 
 -- Return the canonical database timestamp used for durable state transitions.

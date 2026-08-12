@@ -103,10 +103,10 @@ $$;
 -- The function returns one row per processed queue with the number of logical
 -- tasks deleted from that batch.
 CREATE OR REPLACE FUNCTION steda.cleanup_all_queues(
-    queue_name text DEFAULT NULL
+    requested_queue_name text DEFAULT NULL
 )
 RETURNS TABLE (
-    name text,
+    queue_name text,
     tasks_deleted integer
 )
 LANGUAGE plpgsql
@@ -114,26 +114,26 @@ AS $$
 DECLARE
     cleanup_queue_name text;
 BEGIN
-    IF queue_name IS NOT NULL THEN
-        queue_name := steda.validate_queue_name(queue_name);
+    IF requested_queue_name IS NOT NULL THEN
+        requested_queue_name := steda.validate_queue_name(requested_queue_name);
 
         IF NOT EXISTS (
             SELECT 1
             FROM steda.queues queue
-            WHERE queue.name = queue_name
+            WHERE queue.name = requested_queue_name
         ) THEN
-            RAISE EXCEPTION 'Queue "%" does not exist', queue_name;
+            RAISE EXCEPTION 'Queue "%" does not exist', requested_queue_name;
         END IF;
     END IF;
 
     FOR cleanup_queue_name IN
         SELECT queue.name
         FROM steda.queues queue
-        WHERE queue_name IS NULL
-           OR queue.name = queue_name
+        WHERE requested_queue_name IS NULL
+           OR queue.name = requested_queue_name
         ORDER BY queue.name
     LOOP
-        name := cleanup_queue_name;
+        queue_name := cleanup_queue_name;
         tasks_deleted := steda.cleanup_tasks(cleanup_queue_name);
         RETURN NEXT;
     END LOOP;

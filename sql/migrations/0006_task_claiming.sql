@@ -311,9 +311,9 @@ CREATE OR REPLACE FUNCTION steda.claim_tasks(
 )
 RETURNS TABLE (
     run_id uuid,
-    id uuid,
+    task_id uuid,
     attempt integer,
-    name text,
+    task_name text,
     params jsonb,
     headers jsonb
 )
@@ -340,8 +340,9 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1
-        FROM unnest(task_names) AS task_name
-        WHERE task_name IS NULL OR task_name ~ '^[[:space:]]*$'
+        FROM unnest(task_names) AS requested(task_name)
+        WHERE requested.task_name IS NULL
+           OR requested.task_name ~ '^[[:space:]]*$'
     ) THEN
         RAISE EXCEPTION 'task_names cannot contain empty capabilities';
     END IF;
@@ -403,10 +404,10 @@ BEGIN
             RETURNING task.id
         )
         SELECT
-            updated_run.id,
-            task.id,
+            updated_run.id AS run_id,
+            task.id AS task_id,
             updated_run.attempt,
-            task.name,
+            task.name AS task_name,
             task.params,
             task.headers
         FROM updated_runs updated_run

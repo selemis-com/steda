@@ -2,7 +2,7 @@
 -- Workflow checkpoint persistence
 -- ======================================================================
 --
--- Checkpoints provide durable step replay within one logical task. A checkpoint
+-- Checkpoints provide durable workflow replay within one logical task. A checkpoint
 -- name has one immutable committed value for the lifetime of that task, even
 -- across retries and process restarts. Checkpoint writes are still fenced by
 -- the current run lease, so a stale worker cannot publish new durable state.
@@ -20,7 +20,7 @@ CREATE OR REPLACE FUNCTION steda.set_task_checkpoint_state(
     queue_name text,
     task_id uuid,
     checkpoint_name text,
-    result jsonb,
+    new_checkpoint_state jsonb,
     run_id uuid
 )
 RETURNS TABLE (
@@ -62,7 +62,7 @@ BEGIN
             USING message = 'Task cancellation deadline has elapsed';
     END IF;
 
-    -- A durable step name is immutable for the lifetime of the logical task.
+    -- A durable checkpoint name is immutable for the lifetime of the logical task.
     -- The first committed value wins, including across retries.
     EXECUTE format(
         $query$
@@ -78,7 +78,7 @@ BEGIN
         'checkpoints_' || queue_name
     )
     INTO checkpoint_state
-    USING task_id, checkpoint_name, result;
+    USING task_id, checkpoint_name, new_checkpoint_state;
 
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     written := inserted_rows = 1;
@@ -107,8 +107,8 @@ CREATE OR REPLACE FUNCTION steda.get_task_checkpoint_states(
     run_id uuid
 )
 RETURNS TABLE (
-    name text,
-    state jsonb
+    checkpoint_name text,
+    checkpoint_state jsonb
 )
 LANGUAGE plpgsql
 AS $$
@@ -129,8 +129,8 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
         SELECT
-            checkpoint.name,
-            checkpoint.state
+            checkpoint.name AS checkpoint_name,
+            checkpoint.state AS checkpoint_state
         FROM steda.%I checkpoint
         WHERE checkpoint.task_id = $1
         $query$,

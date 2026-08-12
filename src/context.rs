@@ -77,8 +77,8 @@ struct TaskContextInner {
     /// Committed checkpoint cache loaded at task start and updated after writes.
     checkpoint_cache: Mutex<HashMap<String, Json>>,
 
-    /// Per-name local serialization for durable step execution.
-    step_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Per-name local serialization for durable checkpoint access.
+    checkpoint_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
 }
 
 impl fmt::Debug for TaskContextInner {
@@ -93,7 +93,7 @@ impl fmt::Debug for TaskContextInner {
             .field("task", &self.task)
             .field("headers", &self.headers)
             .field("checkpoint_cache", &self.checkpoint_cache)
-            .field("step_locks", &self.step_locks)
+            .field("checkpoint_locks", &self.checkpoint_locks)
             .finish()
     }
 }
@@ -103,7 +103,7 @@ impl TaskContext {
     pub(crate) async fn new(pool: PgPool, queue_name: String, task: ClaimedTask) -> Result<Self> {
         let rows = sqlx::query(
             r#"
-            SELECT name, state
+            SELECT checkpoint_name, checkpoint_state
             FROM steda.get_task_checkpoint_states($1, $2, $3)
             "#,
         )
@@ -117,8 +117,8 @@ impl TaskContext {
         let checkpoint_cache: HashMap<String, Json> = rows
             .into_iter()
             .map(|row| {
-                let name: String = row.get("name");
-                let state: Json = row.get("state");
+                let name: String = row.get("checkpoint_name");
+                let state: Json = row.get("checkpoint_state");
                 (name, state)
             })
             .collect();
@@ -132,7 +132,7 @@ impl TaskContext {
                 task,
                 headers,
                 checkpoint_cache: Mutex::new(checkpoint_cache),
-                step_locks: Mutex::new(HashMap::new()),
+                checkpoint_locks: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -237,8 +237,8 @@ impl TaskContext {
     /// Shared durable-sleep implementation after the sleep value has established its identity.
     async fn sleep_until_inner(&self, sleep: Sleep, wake_at: OffsetDateTime) -> Result<()> {
         let name = workflow_storage_name(SLEEP_PREFIX, sleep.name())?;
-        let step_lock = self.step_lock(&name);
-        let _guard = step_lock.lock().await;
+        let checkpoint_lock = self.checkpoint_lock(&name);
+        let _guard = checkpoint_lock.lock().await;
 
         let actual_wake_at = if let Some(cached) = self.cached_checkpoint(&name) {
             serde_json::from_value(cached)?
@@ -323,8 +323,8 @@ impl TaskContext {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T>> + Send,
     {
-        let step_lock = self.step_lock(name);
-        let _guard = step_lock.lock().await;
+        let checkpoint_lock = self.checkpoint_lock(name);
+        let _guard = checkpoint_lock.lock().await;
 
         if let Some(state) = self.cached_checkpoint(name) {
             return Ok(serde_json::from_value(state)?);
@@ -337,8 +337,8 @@ impl TaskContext {
     }
 
     /// Return the local serializer for one durable checkpoint identity.
-    fn step_lock(&self, name: &str) -> Arc<AsyncMutex<()>> {
-        let mut locks = self.inner.step_locks.lock().unwrap_or_else(PoisonError::into_inner);
+    fn checkpoint_lock(&self, name: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.inner.checkpoint_locks.lock().unwrap_or_else(PoisonError::into_inner);
         Arc::clone(locks.entry(name.to_owned()).or_insert_with(|| Arc::new(AsyncMutex::new(()))))
     }
 

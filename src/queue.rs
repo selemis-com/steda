@@ -143,7 +143,7 @@ impl Queue {
 
         let row = sqlx::query(
             r#"
-            SELECT id AS task_id, created
+            SELECT task_id, created
             FROM steda.spawn_task($1, $2, $3, $4)
             "#,
         )
@@ -250,7 +250,7 @@ impl Queue {
         let row = sqlx::query(
             r#"
             SELECT
-                name,
+                queue_name,
                 ceil(extract(epoch FROM cleanup_ttl))::bigint AS cleanup_ttl_seconds,
                 cleanup_limit
             FROM steda.get_queue_policy($1)
@@ -509,7 +509,7 @@ fn queue_policy_from_row(row: &PgRow) -> Result<QueuePolicy> {
     }
 
     Ok(QueuePolicy {
-        queue_name: row.get("name"),
+        queue_name: row.get("queue_name"),
         cleanup_ttl: Duration::from_secs(cleanup_ttl_seconds),
         cleanup_limit,
     })

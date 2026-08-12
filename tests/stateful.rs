@@ -241,8 +241,6 @@ mod tests {
     #[derive(Debug)]
     struct SpawnedTask {
         task_id: Uuid,
-        run_id: Uuid,
-        attempt: i32,
         created: bool,
     }
 
@@ -515,21 +513,14 @@ mod tests {
         payload: u8,
         options: Value,
     ) -> StatefulResult<SpawnedTask> {
-        let row = sqlx::query(
-            "SELECT id, run_id, attempt, created FROM steda.spawn_task($1, $2, $3, $4)",
-        )
-        .bind(queue)
-        .bind(name)
-        .bind(json!({ "value": payload }))
-        .bind(options)
-        .fetch_one(&mut *connection)
-        .await?;
-        Ok(SpawnedTask {
-            task_id: row.get("id"),
-            run_id: row.get("run_id"),
-            attempt: row.get("attempt"),
-            created: row.get("created"),
-        })
+        let row = sqlx::query("SELECT task_id, created FROM steda.spawn_task($1, $2, $3, $4)")
+            .bind(queue)
+            .bind(name)
+            .bind(json!({ "value": payload }))
+            .bind(options)
+            .fetch_one(&mut *connection)
+            .await?;
+        Ok(SpawnedTask { task_id: row.get("task_id"), created: row.get("created") })
     }
 
     async fn fetch_run(
@@ -957,10 +948,6 @@ mod tests {
                 let now = current_time(connection).await?;
                 let spawned = spawn(connection, queue, name, payload, options.clone()).await?;
                 ensure(spawned.created, "fresh generated spawn was unexpectedly replayed")?;
-                ensure(
-                    spawned.attempt == 1,
-                    "fresh generated spawn returned a non-initial attempt",
-                )?;
                 bindings.spawns.push(SpawnRequest {
                     task_id: spawned.task_id,
                     name: name.to_owned(),
@@ -970,13 +957,14 @@ mod tests {
                 if !bindings.tasks.contains(&spawned.task_id) {
                     bindings.tasks.push(spawned.task_id);
                 }
-                if !bindings.runs.contains(&spawned.run_id) {
-                    bindings.runs.push(spawned.run_id);
-                }
                 let task = fetch_task(connection, queue, spawned.task_id)
                     .await?
                     .ok_or_else(|| stateful_error("spawned task disappeared"))?;
-                let run = fetch_run(connection, queue, spawned.run_id)
+                let run_id = task.last_attempt_run;
+                if !bindings.runs.contains(&run_id) {
+                    bindings.runs.push(run_id);
+                }
+                let run = fetch_run(connection, queue, run_id)
                     .await?
                     .ok_or_else(|| stateful_error("spawned run disappeared"))?;
                 ensure(task.state == "pending", "spawned task is not pending")?;
@@ -990,7 +978,7 @@ mod tests {
                     "spawned task max_attempts mismatch",
                 )?;
                 ensure(
-                    task.last_attempt_run == spawned.run_id,
+                    task.last_attempt_run == run_id,
                     "spawned task does not point at its first run",
                 )?;
                 ensure(run.task_id == spawned.task_id, "spawned run belongs to another task")?;
@@ -1034,7 +1022,7 @@ mod tests {
                         retry_description(retry),
                         cancellation_description(cancellation, seconds),
                         task_label(bindings, spawned.task_id),
-                        run_label(bindings, spawned.run_id),
+                        run_label(bindings, run_id),
                     ),
                     1,
                 ))
@@ -1060,14 +1048,6 @@ mod tests {
                 .await?;
                 ensure(!replay.created, "idempotent replay created a second task")?;
                 ensure(replay.task_id == request.task_id, "idempotent replay changed task id")?;
-                ensure(
-                    replay.run_id == before.last_attempt_run,
-                    "idempotent replay did not return the authoritative run",
-                )?;
-                ensure(
-                    replay.attempt == before.attempts,
-                    "idempotent replay did not return the current attempt",
-                )?;
                 let after = fetch_task(connection, queue, request.task_id)
                     .await?
                     .ok_or_else(|| stateful_error("idempotent replay target disappeared"))?;
@@ -1076,8 +1056,8 @@ mod tests {
                     format!(
                         "REPLAY {} -> existing {} attempt={}",
                         task_label(bindings, request.task_id),
-                        run_label(bindings, replay.run_id),
-                        replay.attempt,
+                        run_label(bindings, before.last_attempt_run),
+                        before.attempts,
                     ),
                     1,
                 ))
@@ -1093,7 +1073,7 @@ mod tests {
                 let claimable_before = count_claimable(connection, queue, &task_names).await?;
                 let now = current_time(connection).await?;
                 let row = sqlx::query(
-                    "SELECT run_id, id, attempt, name FROM steda.claim_tasks($1, $2, $3, 1, $4)",
+                    "SELECT run_id, task_id, attempt, task_name FROM steda.claim_tasks($1, $2, $3, 1, $4)",
                 )
                 .bind(queue)
                 .bind(worker_id)
@@ -1117,10 +1097,10 @@ mod tests {
                         0,
                     ));
                 };
-                let name: String = row.get("name");
+                let name: String = row.get("task_name");
                 ensure(task_names.contains(&name), "claim returned an unsupported task")?;
                 let run_id: Uuid = row.get("run_id");
-                let task_id: Uuid = row.get("id");
+                let task_id: Uuid = row.get("task_id");
                 let attempt: i32 = row.get("attempt");
                 if !bindings.tasks.contains(&task_id) {
                     bindings.tasks.push(task_id);
@@ -1794,7 +1774,7 @@ mod tests {
                     .ok_or_else(|| stateful_error("checkpoint disappeared after write"))?;
                 ensure(after == expected_state, "checkpoint storage changed on replay")?;
                 let visible: Vec<(String, Value)> = sqlx::query_as(
-                    "SELECT name, state FROM steda.get_task_checkpoint_states($1, $2, $3)",
+                    "SELECT checkpoint_name, checkpoint_state FROM steda.get_task_checkpoint_states($1, $2, $3)",
                 )
                 .bind(queue)
                 .bind(status.task_id)
@@ -2004,7 +1984,6 @@ mod tests {
                 spawn(&mut connection, &queue, "alpha", 0, initial_options.clone()).await?;
             ensure(initial.created, "initial stateful task was unexpectedly replayed")?;
             bindings.tasks.push(initial.task_id);
-            bindings.runs.push(initial.run_id);
             bindings.spawns.push(SpawnRequest {
                 task_id: initial.task_id,
                 name: "alpha".to_owned(),

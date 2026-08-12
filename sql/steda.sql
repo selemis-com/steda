@@ -32,6 +32,14 @@
 -- Establish the shared schema, logical queue registry, canonical database
 -- clock, and queue-name rules used by all later sections.
 
+DO $$
+BEGIN
+    IF current_setting('server_version_num')::integer < 180000 THEN
+        RAISE EXCEPTION 'Steda requires PostgreSQL 18 or newer';
+    END IF;
+END;
+$$;
+
 CREATE SCHEMA IF NOT EXISTS steda;
 
 -- Return the canonical database timestamp used for durable state transitions.
@@ -441,20 +449,20 @@ $$;
 --
 -- A missing queue produces no row; higher-level APIs may translate that into a
 -- domain error.
-CREATE OR REPLACE FUNCTION steda.get_queue_policy(queue_name text)
+CREATE OR REPLACE FUNCTION steda.get_queue_policy(requested_queue_name text)
 RETURNS TABLE (
-    name text,
+    queue_name text,
     cleanup_ttl interval,
     cleanup_limit integer
 )
 LANGUAGE sql
 AS $$
     SELECT
-        queue.name,
+        queue.name AS queue_name,
         queue.cleanup_ttl,
         queue.cleanup_limit
     FROM steda.queues queue
-    WHERE queue.name = steda.validate_queue_name(queue_name);
+    WHERE queue.name = steda.validate_queue_name(requested_queue_name);
 $$;
 
 -- Update the persisted cleanup policy for one queue.
@@ -566,8 +574,12 @@ BEGIN
         RAISE EXCEPTION 'retry attempt must be at least 1';
     END IF;
 
+    IF NOT strategy ? 'kind' OR jsonb_typeof(strategy -> 'kind') <> 'string' THEN
+        RAISE EXCEPTION 'retry strategy kind must be a string';
+    END IF;
+
     retry_kind := strategy ->> 'kind';
-    IF retry_kind IS NULL OR length(trim(retry_kind)) = 0 THEN
+    IF length(trim(retry_kind)) = 0 THEN
         RAISE EXCEPTION 'retry strategy kind must be provided';
     END IF;
 
@@ -599,6 +611,9 @@ BEGIN
         IF NOT strategy ? 'baseSeconds' THEN
             RAISE EXCEPTION 'fixed retry strategy requires baseSeconds';
         END IF;
+        IF jsonb_typeof(strategy -> 'baseSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry baseSeconds must be a JSON number';
+        END IF;
 
         base_seconds := (strategy ->> 'baseSeconds')::double precision;
         IF base_seconds IS NULL
@@ -628,6 +643,15 @@ BEGIN
         END IF;
         IF NOT strategy ? 'factor' THEN
             RAISE EXCEPTION 'exponential retry strategy requires factor';
+        END IF;
+        IF jsonb_typeof(strategy -> 'baseSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry baseSeconds must be a JSON number';
+        END IF;
+        IF jsonb_typeof(strategy -> 'factor') <> 'number' THEN
+            RAISE EXCEPTION 'retry factor must be a JSON number';
+        END IF;
+        IF strategy ? 'maxSeconds' AND jsonb_typeof(strategy -> 'maxSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry maxSeconds must be a JSON number';
         END IF;
 
         base_seconds := (strategy ->> 'baseSeconds')::double precision;
@@ -779,8 +803,7 @@ CREATE OR REPLACE FUNCTION steda.get_task_result(
     task_id uuid
 )
 RETURNS TABLE (
-    id uuid,
-    name text,
+    task_name text,
     state text,
     result jsonb,
     failure_reason jsonb
@@ -793,8 +816,7 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
         SELECT
-            task.id,
-            task.name,
+            task.name AS task_name,
             task.state,
             CASE
                 WHEN task.state = 'completed' THEN run.result
@@ -834,9 +856,7 @@ CREATE OR REPLACE FUNCTION steda.spawn_task(
     options jsonb DEFAULT '{}'::jsonb
 )
 RETURNS TABLE (
-    id uuid,
-    run_id uuid,
-    attempt integer,
+    task_id uuid,
     created boolean
 )
 LANGUAGE plpgsql
@@ -851,14 +871,14 @@ DECLARE
     cancellation_policy jsonb;
     idempotency_key text;
     existing_task_id uuid;
-    existing_run_id uuid;
-    existing_attempt integer;
     existing_name text;
     existing_params jsonb;
     existing_headers jsonb;
     existing_retry_strategy jsonb;
     existing_initial_max_attempts integer;
     existing_cancellation jsonb;
+    maximum_attempts_numeric numeric;
+    unknown_key text;
     row_count integer;
     now_at timestamptz := steda.current_time();
     normalized_params jsonb := coalesce(params, 'null'::jsonb);
@@ -869,6 +889,22 @@ BEGIN
         options := '{}'::jsonb;
     ELSIF jsonb_typeof(options) <> 'object' THEN
         RAISE EXCEPTION 'spawn options must be a JSON object';
+    END IF;
+
+    SELECT keys.key
+    INTO unknown_key
+    FROM jsonb_object_keys(options) AS keys(key)
+    WHERE keys.key NOT IN (
+        'headers',
+        'maxAttempts',
+        'retryStrategy',
+        'cancellation',
+        'idempotencyKey'
+    )
+    LIMIT 1;
+
+    IF unknown_key IS NOT NULL THEN
+        RAISE EXCEPTION 'spawn options do not support key "%"', unknown_key;
     END IF;
 
     IF task_name IS NULL OR task_name ~ '^[[:space:]]*$' THEN
@@ -889,15 +925,28 @@ BEGIN
     END IF;
 
     IF options ? 'maxAttempts' THEN
-        maximum_attempts := (options ->> 'maxAttempts')::int;
-
-        IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
-            RAISE EXCEPTION 'max_attempts must be >= 1';
+        IF jsonb_typeof(options -> 'maxAttempts') <> 'number' THEN
+            RAISE EXCEPTION 'maxAttempts must be a JSON integer';
         END IF;
+
+        maximum_attempts_numeric := (options ->> 'maxAttempts')::numeric;
+        IF maximum_attempts_numeric <> trunc(maximum_attempts_numeric)
+            OR maximum_attempts_numeric < 1
+            OR maximum_attempts_numeric > 2147483647
+        THEN
+            RAISE EXCEPTION 'maxAttempts must be an integer between 1 and 2147483647';
+        END IF;
+        maximum_attempts := maximum_attempts_numeric::integer;
     END IF;
 
     cancellation_policy := steda.validate_cancellation_policy(options -> 'cancellation');
-    idempotency_key := options ->> 'idempotencyKey';
+
+    IF options ? 'idempotencyKey' THEN
+        IF jsonb_typeof(options -> 'idempotencyKey') <> 'string' THEN
+            RAISE EXCEPTION 'idempotencyKey must be a JSON string';
+        END IF;
+        idempotency_key := options ->> 'idempotencyKey';
+    END IF;
 
     maximum_attempts := coalesce(maximum_attempts, 5);
     task_retry_strategy := coalesce(task_retry_strategy, steda.default_retry_strategy());
@@ -984,8 +1033,6 @@ BEGIN
             $query$
             SELECT
                 id,
-                last_attempt_run,
-                attempts,
                 name,
                 params,
                 headers,
@@ -999,8 +1046,6 @@ BEGIN
         )
         INTO
             existing_task_id,
-            existing_run_id,
-            existing_attempt,
             existing_name,
             existing_params,
             existing_headers,
@@ -1026,8 +1071,6 @@ BEGIN
         RETURN QUERY
         SELECT
             existing_task_id,
-            existing_run_id,
-            existing_attempt,
             FALSE;
 
         RETURN;
@@ -1053,8 +1096,6 @@ BEGIN
     RETURN QUERY
     SELECT
         resolved_task_id,
-        initial_run_id,
-        current_attempt,
         TRUE;
 END;
 $$;
@@ -2030,9 +2071,9 @@ CREATE OR REPLACE FUNCTION steda.claim_tasks(
 )
 RETURNS TABLE (
     run_id uuid,
-    id uuid,
+    task_id uuid,
     attempt integer,
-    name text,
+    task_name text,
     params jsonb,
     headers jsonb
 )
@@ -2059,8 +2100,9 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1
-        FROM unnest(task_names) AS task_name
-        WHERE task_name IS NULL OR task_name ~ '^[[:space:]]*$'
+        FROM unnest(task_names) AS requested(task_name)
+        WHERE requested.task_name IS NULL
+           OR requested.task_name ~ '^[[:space:]]*$'
     ) THEN
         RAISE EXCEPTION 'task_names cannot contain empty capabilities';
     END IF;
@@ -2122,10 +2164,10 @@ BEGIN
             RETURNING task.id
         )
         SELECT
-            updated_run.id,
-            task.id,
+            updated_run.id AS run_id,
+            task.id AS task_id,
             updated_run.attempt,
-            task.name,
+            task.name AS task_name,
             task.params,
             task.headers
         FROM updated_runs updated_run
@@ -2145,7 +2187,7 @@ $$;
 -- Workflow checkpoint persistence
 -- ======================================================================
 --
--- Checkpoints provide durable step replay within one logical task. A checkpoint
+-- Checkpoints provide durable workflow replay within one logical task. A checkpoint
 -- name has one immutable committed value for the lifetime of that task, even
 -- across retries and process restarts. Checkpoint writes are still fenced by
 -- the current run lease, so a stale worker cannot publish new durable state.
@@ -2163,7 +2205,7 @@ CREATE OR REPLACE FUNCTION steda.set_task_checkpoint_state(
     queue_name text,
     task_id uuid,
     checkpoint_name text,
-    result jsonb,
+    new_checkpoint_state jsonb,
     run_id uuid
 )
 RETURNS TABLE (
@@ -2205,7 +2247,7 @@ BEGIN
             USING message = 'Task cancellation deadline has elapsed';
     END IF;
 
-    -- A durable step name is immutable for the lifetime of the logical task.
+    -- A durable checkpoint name is immutable for the lifetime of the logical task.
     -- The first committed value wins, including across retries.
     EXECUTE format(
         $query$
@@ -2221,7 +2263,7 @@ BEGIN
         'checkpoints_' || queue_name
     )
     INTO checkpoint_state
-    USING task_id, checkpoint_name, result;
+    USING task_id, checkpoint_name, new_checkpoint_state;
 
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     written := inserted_rows = 1;
@@ -2250,8 +2292,8 @@ CREATE OR REPLACE FUNCTION steda.get_task_checkpoint_states(
     run_id uuid
 )
 RETURNS TABLE (
-    name text,
-    state jsonb
+    checkpoint_name text,
+    checkpoint_state jsonb
 )
 LANGUAGE plpgsql
 AS $$
@@ -2272,8 +2314,8 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
         SELECT
-            checkpoint.name,
-            checkpoint.state
+            checkpoint.name AS checkpoint_name,
+            checkpoint.state AS checkpoint_state
         FROM steda.%I checkpoint
         WHERE checkpoint.task_id = $1
         $query$,
@@ -2387,10 +2429,10 @@ $$;
 -- The function returns one row per processed queue with the number of logical
 -- tasks deleted from that batch.
 CREATE OR REPLACE FUNCTION steda.cleanup_all_queues(
-    queue_name text DEFAULT NULL
+    requested_queue_name text DEFAULT NULL
 )
 RETURNS TABLE (
-    name text,
+    queue_name text,
     tasks_deleted integer
 )
 LANGUAGE plpgsql
@@ -2398,26 +2440,26 @@ AS $$
 DECLARE
     cleanup_queue_name text;
 BEGIN
-    IF queue_name IS NOT NULL THEN
-        queue_name := steda.validate_queue_name(queue_name);
+    IF requested_queue_name IS NOT NULL THEN
+        requested_queue_name := steda.validate_queue_name(requested_queue_name);
 
         IF NOT EXISTS (
             SELECT 1
             FROM steda.queues queue
-            WHERE queue.name = queue_name
+            WHERE queue.name = requested_queue_name
         ) THEN
-            RAISE EXCEPTION 'Queue "%" does not exist', queue_name;
+            RAISE EXCEPTION 'Queue "%" does not exist', requested_queue_name;
         END IF;
     END IF;
 
     FOR cleanup_queue_name IN
         SELECT queue.name
         FROM steda.queues queue
-        WHERE queue_name IS NULL
-           OR queue.name = queue_name
+        WHERE requested_queue_name IS NULL
+           OR queue.name = requested_queue_name
         ORDER BY queue.name
     LOOP
-        name := cleanup_queue_name;
+        queue_name := cleanup_queue_name;
         tasks_deleted := steda.cleanup_tasks(cleanup_queue_name);
         RETURN NEXT;
     END LOOP;

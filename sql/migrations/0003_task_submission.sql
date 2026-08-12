@@ -50,8 +50,12 @@ BEGIN
         RAISE EXCEPTION 'retry attempt must be at least 1';
     END IF;
 
+    IF NOT strategy ? 'kind' OR jsonb_typeof(strategy -> 'kind') <> 'string' THEN
+        RAISE EXCEPTION 'retry strategy kind must be a string';
+    END IF;
+
     retry_kind := strategy ->> 'kind';
-    IF retry_kind IS NULL OR length(trim(retry_kind)) = 0 THEN
+    IF length(trim(retry_kind)) = 0 THEN
         RAISE EXCEPTION 'retry strategy kind must be provided';
     END IF;
 
@@ -83,6 +87,9 @@ BEGIN
         IF NOT strategy ? 'baseSeconds' THEN
             RAISE EXCEPTION 'fixed retry strategy requires baseSeconds';
         END IF;
+        IF jsonb_typeof(strategy -> 'baseSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry baseSeconds must be a JSON number';
+        END IF;
 
         base_seconds := (strategy ->> 'baseSeconds')::double precision;
         IF base_seconds IS NULL
@@ -112,6 +119,15 @@ BEGIN
         END IF;
         IF NOT strategy ? 'factor' THEN
             RAISE EXCEPTION 'exponential retry strategy requires factor';
+        END IF;
+        IF jsonb_typeof(strategy -> 'baseSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry baseSeconds must be a JSON number';
+        END IF;
+        IF jsonb_typeof(strategy -> 'factor') <> 'number' THEN
+            RAISE EXCEPTION 'retry factor must be a JSON number';
+        END IF;
+        IF strategy ? 'maxSeconds' AND jsonb_typeof(strategy -> 'maxSeconds') <> 'number' THEN
+            RAISE EXCEPTION 'retry maxSeconds must be a JSON number';
         END IF;
 
         base_seconds := (strategy ->> 'baseSeconds')::double precision;
@@ -263,8 +279,7 @@ CREATE OR REPLACE FUNCTION steda.get_task_result(
     task_id uuid
 )
 RETURNS TABLE (
-    id uuid,
-    name text,
+    task_name text,
     state text,
     result jsonb,
     failure_reason jsonb
@@ -277,8 +292,7 @@ BEGIN
     RETURN QUERY EXECUTE format(
         $query$
         SELECT
-            task.id,
-            task.name,
+            task.name AS task_name,
             task.state,
             CASE
                 WHEN task.state = 'completed' THEN run.result
@@ -318,9 +332,7 @@ CREATE OR REPLACE FUNCTION steda.spawn_task(
     options jsonb DEFAULT '{}'::jsonb
 )
 RETURNS TABLE (
-    id uuid,
-    run_id uuid,
-    attempt integer,
+    task_id uuid,
     created boolean
 )
 LANGUAGE plpgsql
@@ -335,14 +347,14 @@ DECLARE
     cancellation_policy jsonb;
     idempotency_key text;
     existing_task_id uuid;
-    existing_run_id uuid;
-    existing_attempt integer;
     existing_name text;
     existing_params jsonb;
     existing_headers jsonb;
     existing_retry_strategy jsonb;
     existing_initial_max_attempts integer;
     existing_cancellation jsonb;
+    maximum_attempts_numeric numeric;
+    unknown_key text;
     row_count integer;
     now_at timestamptz := steda.current_time();
     normalized_params jsonb := coalesce(params, 'null'::jsonb);
@@ -353,6 +365,22 @@ BEGIN
         options := '{}'::jsonb;
     ELSIF jsonb_typeof(options) <> 'object' THEN
         RAISE EXCEPTION 'spawn options must be a JSON object';
+    END IF;
+
+    SELECT keys.key
+    INTO unknown_key
+    FROM jsonb_object_keys(options) AS keys(key)
+    WHERE keys.key NOT IN (
+        'headers',
+        'maxAttempts',
+        'retryStrategy',
+        'cancellation',
+        'idempotencyKey'
+    )
+    LIMIT 1;
+
+    IF unknown_key IS NOT NULL THEN
+        RAISE EXCEPTION 'spawn options do not support key "%"', unknown_key;
     END IF;
 
     IF task_name IS NULL OR task_name ~ '^[[:space:]]*$' THEN
@@ -373,15 +401,28 @@ BEGIN
     END IF;
 
     IF options ? 'maxAttempts' THEN
-        maximum_attempts := (options ->> 'maxAttempts')::int;
-
-        IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
-            RAISE EXCEPTION 'max_attempts must be >= 1';
+        IF jsonb_typeof(options -> 'maxAttempts') <> 'number' THEN
+            RAISE EXCEPTION 'maxAttempts must be a JSON integer';
         END IF;
+
+        maximum_attempts_numeric := (options ->> 'maxAttempts')::numeric;
+        IF maximum_attempts_numeric <> trunc(maximum_attempts_numeric)
+            OR maximum_attempts_numeric < 1
+            OR maximum_attempts_numeric > 2147483647
+        THEN
+            RAISE EXCEPTION 'maxAttempts must be an integer between 1 and 2147483647';
+        END IF;
+        maximum_attempts := maximum_attempts_numeric::integer;
     END IF;
 
     cancellation_policy := steda.validate_cancellation_policy(options -> 'cancellation');
-    idempotency_key := options ->> 'idempotencyKey';
+
+    IF options ? 'idempotencyKey' THEN
+        IF jsonb_typeof(options -> 'idempotencyKey') <> 'string' THEN
+            RAISE EXCEPTION 'idempotencyKey must be a JSON string';
+        END IF;
+        idempotency_key := options ->> 'idempotencyKey';
+    END IF;
 
     maximum_attempts := coalesce(maximum_attempts, 5);
     task_retry_strategy := coalesce(task_retry_strategy, steda.default_retry_strategy());
@@ -468,8 +509,6 @@ BEGIN
             $query$
             SELECT
                 id,
-                last_attempt_run,
-                attempts,
                 name,
                 params,
                 headers,
@@ -483,8 +522,6 @@ BEGIN
         )
         INTO
             existing_task_id,
-            existing_run_id,
-            existing_attempt,
             existing_name,
             existing_params,
             existing_headers,
@@ -510,8 +547,6 @@ BEGIN
         RETURN QUERY
         SELECT
             existing_task_id,
-            existing_run_id,
-            existing_attempt,
             FALSE;
 
         RETURN;
@@ -537,8 +572,6 @@ BEGIN
     RETURN QUERY
     SELECT
         resolved_task_id,
-        initial_run_id,
-        current_attempt,
         TRUE;
 END;
 $$;

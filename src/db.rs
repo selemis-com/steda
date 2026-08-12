@@ -40,9 +40,9 @@ pub(crate) async fn claim_tasks(
         r#"
         SELECT
             run_id,
-            id AS task_id,
+            task_id,
             attempt,
-            name AS task_name,
+            task_name,
             params,
             headers
         FROM steda.claim_tasks($1, $2, $3, $4, $5)
@@ -116,7 +116,7 @@ pub(crate) async fn fetch_task_result_snapshot(
 ) -> Result<Option<TaskResultSnapshot>> {
     let row = sqlx::query(
         r#"
-        SELECT name AS task_name, state, result, failure_reason
+        SELECT task_name, state, result, failure_reason
         FROM steda.get_task_result($1, $2)
         "#,
     )

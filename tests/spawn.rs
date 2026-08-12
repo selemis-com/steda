@@ -133,7 +133,7 @@ mod tests {
 
         let oversized_name = "x".repeat(1025);
         let error =
-            sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, '{}'::jsonb)")
+            sqlx::query("SELECT task_id FROM steda.spawn_task($1, $2, '{}'::jsonb, '{}'::jsonb)")
                 .bind(&queue)
                 .bind(&oversized_name)
                 .fetch_one(&pool)
@@ -211,7 +211,7 @@ mod tests {
             json!({"maxDelay": "1"}),
         ] {
             let options = json!({"cancellation": cancellation});
-            sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
+            sqlx::query("SELECT task_id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
                 .bind(&queue)
                 .bind(UNREGISTERED_IDEM.name())
                 .bind(options)
@@ -220,14 +220,37 @@ mod tests {
                 .expect_err("noncanonical cancellation policy must be rejected by PostgreSQL");
         }
 
-        let invalid_options = json!([]);
-        sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
-            .bind(&queue)
-            .bind(UNREGISTERED_IDEM.name())
-            .bind(invalid_options)
-            .fetch_one(&pool)
-            .await
-            .expect_err("spawn options must be a JSON object");
+        for invalid_options in [
+            json!([]),
+            json!({"unknownOption": true}),
+            json!({"maxAttempts": "2"}),
+            json!({"maxAttempts": 1.5}),
+            json!({"idempotencyKey": 42}),
+            json!({"retryStrategy": {"kind": "fixed", "baseSeconds": "1"}}),
+            json!({
+                "retryStrategy": {
+                    "kind": "exponential",
+                    "baseSeconds": 1,
+                    "factor": "2"
+                }
+            }),
+            json!({
+                "retryStrategy": {
+                    "kind": "exponential",
+                    "baseSeconds": 1,
+                    "factor": 2,
+                    "maxSeconds": "10"
+                }
+            }),
+        ] {
+            sqlx::query("SELECT task_id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")
+                .bind(&queue)
+                .bind(UNREGISTERED_IDEM.name())
+                .bind(invalid_options)
+                .fetch_one(&pool)
+                .await
+                .expect_err("noncanonical spawn options must be rejected by PostgreSQL");
+        }
 
         app.delete().await?;
         Ok(())
