@@ -168,7 +168,8 @@ impl<'a, Input, Output> Spawn<'a, Input, Output> {
     /// Set the queue-scoped idempotency key for logical-task creation.
     ///
     /// Replaying the same key with the same original spawn request returns the existing task.
-    /// Reusing it for a different request returns [`Error::IdempotencyConflict`].
+    /// Reusing it for a different request returns [`Error::IdempotencyConflict`]. The key is
+    /// reserved only while the logical task remains within the queue's retention window.
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.options.idempotency_key = Some(key.into());
         self
@@ -192,7 +193,9 @@ where
 ///
 /// The serialized representation includes the queue, persisted task name, and logical [`TaskId`].
 /// The generic parameters retain the task's input/output relationship while the persisted task
-/// name keeps the concrete task definition attached across process restarts.
+/// name keeps the concrete task definition attached across process restarts. A reference addresses
+/// retained durable state. After retention cleanup deletes the logical task, snapshots return
+/// `None` and result/control operations report [`Error::TaskNotFound`].
 pub struct TaskRef<Input, Output> {
     /// Queue containing the logical task.
     queue_name: String,

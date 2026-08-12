@@ -51,6 +51,40 @@ jobs:
       - name: Check MSRV
         run: cargo +1.95 check --workspace --all-targets --all-features --locked
 
+  check-features:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2.85.8
+        with:
+          tool: cargo-hack
+
+      - name: Check feature powerset
+        run: make check
+
   test-unit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -363,6 +397,7 @@ jobs:
     if: always()
     needs:
       - msrv
+      - check-features
       - test-unit
       - test-stateful
       - test-examples

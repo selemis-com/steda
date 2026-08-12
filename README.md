@@ -36,7 +36,7 @@ Steda requires PostgreSQL 18+. See [MSRV](#msrv) for supported Rust versions.
 cargo add steda
 ```
 
-Download [`sql/steda.sql`](sql/steda.sql) and apply it to your PostgreSQL database before starting producers or workers.
+Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it to your PostgreSQL database before starting producers or workers.
 
 When upgrading Steda, apply the `steda.sql` file from the new release again.
 
@@ -130,7 +130,8 @@ let task = payments
 ```
 
 Replaying the same request returns the existing logical task. Reusing the key for a different
-request returns `Error::IdempotencyConflict`.
+request returns `Error::IdempotencyConflict`. The key remains reserved only while that logical
+task is retained; retention cleanup removes the task and releases its idempotency key.
 
 ### Retries
 
@@ -193,9 +194,9 @@ checkpoints and sleeps replay until execution reaches new work.
 
 ### Durable compatibility
 
-Task names, step names, and their serialized input, output, and checkpoint values are persisted
-workflow contracts. Keep their serialization compatible while old work may still exist, or use a
-new stable task or step name for an incompatible version.
+Task names, step names, sleep names, and their serialized input, output, and checkpoint values are
+persisted workflow contracts. Keep their serialization compatible while old work may still exist,
+or use a new stable task, step, or sleep name for an incompatible version.
 
 ### Provisioned execution
 

@@ -155,10 +155,10 @@
 //!
 //! ## Durable compatibility
 //!
-//! Persisted task names, step names, and their serialized input, output, and checkpoint values are
-//! part of a workflow's durable compatibility boundary. Keep their serialization compatible while
-//! old work may still exist, or introduce a new stable task or step name for an incompatible
-//! version.
+//! Persisted task names, step names, sleep names, and their serialized input, output, and
+//! checkpoint values are part of a workflow's durable compatibility boundary. Keep their
+//! serialization compatible while old work may still exist, or introduce a new stable task, step,
+//! or sleep name for an incompatible version.
 //!
 //! # Submission guarantees
 //!
@@ -169,8 +169,10 @@
 //! returns [`Error::IdempotencyConflict`]. The comparison includes the task name, input, headers,
 //! retry configuration, attempt budget, and cancellation policy.
 //!
-//! Idempotent spawn protects **submission**. It does not deduplicate arbitrary side effects inside
-//! a handler.
+//! The idempotency key remains reserved only while the original logical task is retained. Retention
+//! cleanup deletes that task row and releases the key, so the same key may create a new logical
+//! task afterwards. Idempotent spawn protects **submission**; it does not deduplicate arbitrary
+//! side effects inside a handler.
 //!
 //! ## Cancellation deadlines
 //!
@@ -220,7 +222,8 @@
 //! [`Queue::cleanup`] applies the persisted policy to one queue. [`Steda::cleanup`] performs one
 //! policy-driven pass across all queues. Cleanup removes terminal logical tasks; `PostgreSQL`
 //! foreign keys cascade to their runs and checkpoints. Pending, running, and sleeping tasks are not
-//! retention candidates.
+//! retention candidates. Cleanup also releases a task's idempotency key, and existing [`TaskRef`]
+//! values for a deleted task will subsequently resolve as not found.
 //!
 //! ## Metrics
 //!

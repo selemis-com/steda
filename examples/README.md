@@ -33,8 +33,9 @@ cargo run --example idempotent_webhook
 Models a payment webhook that may be delivered more than once. Two identical spawns use the same
 queue-scoped idempotency key and resolve to one logical task.
 
-The important boundary is submission: an idempotency key deduplicates Steda task creation. If the
-handler calls another system, that system may still need its own idempotency key.
+The important boundary is submission: an idempotency key deduplicates Steda task creation while
+the original logical task is retained. Cleanup releases the key. If the handler calls another
+system, that system may still need its own idempotency key.
 
 ## `retrying_delivery`
 

@@ -118,6 +118,33 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn cleanup_releases_task_idempotency_key(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("cleanup_idempotency");
+        let app = Steda::from_pool(pool).queue(queue)?;
+        app.create_with_policy(
+            QueuePolicyOptions::new().cleanup_ttl(Duration::ZERO).cleanup_limit(100),
+        )
+        .await?;
+        let worker = app
+            .worker()
+            .task(CLEANUP_TEST_TASK, async |_params: Value, _ctx| Ok(json!({"done": true})))
+            .build()?;
+        let key = "cleanup-reusable-key";
+
+        let first = app.spawn(CLEANUP_TEST_TASK, json!({"value": 1})).idempotency_key(key).await?;
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+        assert_eq!(app.cleanup().await?, 1);
+        assert_eq!(first.snapshot().await?, None);
+
+        let second = app.spawn(CLEANUP_TEST_TASK, json!({"value": 1})).idempotency_key(key).await?;
+        assert!(second.created());
+        assert_ne!(second.task_id(), first.task_id());
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn global_cleanup_uses_each_queue_persisted_policy(pool: PgPool) -> Result<()> {
         let first_name = unique_queue("cleanup_all_first");
         let second_name = unique_queue("cleanup_all_second");

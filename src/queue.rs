@@ -318,8 +318,9 @@ impl Queue {
     /// Delete old terminal tasks according to this queue's persisted retention policy.
     ///
     /// Only logical tasks in terminal states are retention candidates. Deleting a task cascades
-    /// to its runs and checkpoints through `PostgreSQL` foreign keys; pending, running, and
-    /// sleeping tasks are not removed by retention cleanup.
+    /// to its runs and checkpoints through `PostgreSQL` foreign keys, releases its idempotency key,
+    /// and makes existing task references resolve as not found. Pending, running, and sleeping
+    /// tasks are not removed by retention cleanup.
     ///
     /// # Errors
     ///
