@@ -11,7 +11,7 @@ use crate::{
     queue::{Queue, validate_queue_name},
     types::{
         CancellationPolicy, Json, JsonObject, RetryStrategy, SpawnConfig, TaskId,
-        TaskResultSnapshot, TaskResultState,
+        TaskResultSnapshot, TaskState,
     },
 };
 
@@ -328,14 +328,14 @@ pub enum TaskSnapshot<T> {
 
 impl<T> TaskSnapshot<T> {
     /// Return the state without its completion or failure payload.
-    pub const fn state(&self) -> TaskResultState {
+    pub const fn state(&self) -> TaskState {
         match self {
-            Self::Pending => TaskResultState::Pending,
-            Self::Running => TaskResultState::Running,
-            Self::Sleeping => TaskResultState::Sleeping,
-            Self::Completed { .. } => TaskResultState::Completed,
-            Self::Failed { .. } => TaskResultState::Failed,
-            Self::Cancelled => TaskResultState::Cancelled,
+            Self::Pending => TaskState::Pending,
+            Self::Running => TaskState::Running,
+            Self::Sleeping => TaskState::Sleeping,
+            Self::Completed { .. } => TaskState::Completed,
+            Self::Failed { .. } => TaskState::Failed,
+            Self::Cancelled => TaskState::Cancelled,
         }
     }
 
@@ -402,7 +402,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
         Output: DeserializeOwned,
     {
         self.queue
-            .fetch_task_result(self.task_id())
+            .fetch_task_result(self.task_ref.task_name(), self.task_id())
             .await?
             .map(decode_snapshot::<Output>)
             .transpose()
@@ -414,6 +414,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ///
     /// Returns an error if the database cancellation fails.
     pub async fn cancel(&self) -> Result<()> {
+        self.queue.ensure_task_ref(self.task_ref.task_name(), self.task_id()).await?;
         self.queue.cancel_task(self.task_id()).await
     }
 
@@ -423,6 +424,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
     ///
     /// Returns an error if the task is missing, is not failed, or the database retry fails.
     pub async fn retry(&self) -> Result<crate::RunId> {
+        self.queue.ensure_task_ref(self.task_ref.task_name(), self.task_id()).await?;
         self.queue.retry_task(self.task_id()).await
     }
 
@@ -462,6 +464,7 @@ impl<Input, Output> TaskHandle<Input, Output> {
         let snapshot = await_task_result_snapshot(
             self.queue.pool(),
             self.queue.name(),
+            self.task_ref.task_name(),
             self.task_id(),
             timeout,
         )

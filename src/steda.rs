@@ -121,7 +121,7 @@ impl Steda {
                 let tasks_deleted = u32::try_from(tasks_deleted).map_err(|_| {
                     Error::Other("PostgreSQL returned a negative cleanup count".to_owned())
                 })?;
-                Ok(QueueCleanup { name: row.get("name"), tasks_deleted })
+                Ok(QueueCleanup { queue_name: row.get("name"), tasks_deleted })
             })
             .collect()
     }

@@ -279,9 +279,12 @@ impl TaskContext {
         let checkpoint_name = format!("{TASK_WAIT_PREFIX}{}:{}", task.queue_name(), task.task_id());
         let pool = self.inner.pool.clone();
         let queue_name = task.queue_name().to_owned();
+        let task_name = task.task_name().to_owned();
         let task_id = task.task_id();
         self.checkpoint(&checkpoint_name, async move || {
-            let snapshot = await_task_result_snapshot(&pool, &queue_name, task_id, timeout).await?;
+            let snapshot =
+                await_task_result_snapshot(&pool, &queue_name, &task_name, task_id, timeout)
+                    .await?;
             decode_result(snapshot)
         })
         .await

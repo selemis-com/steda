@@ -44,6 +44,17 @@ pub enum Error {
     #[error("task {0} not found")]
     TaskNotFound(TaskId),
 
+    /// A durable task reference names a different task definition than the persisted task.
+    #[error("task {task_id} is persisted as {actual:?}, but the task reference names {expected:?}")]
+    TaskNameMismatch {
+        /// Logical task identifier.
+        task_id: TaskId,
+        /// Task name carried by the durable reference.
+        expected: String,
+        /// Task name stored with the logical task.
+        actual: String,
+    },
+
     /// Task reached a terminal failed state.
     #[error("task failed: {failure}")]
     TaskFailed {

@@ -284,9 +284,16 @@ impl Queue {
     /// Returns an error if the result snapshot cannot be fetched.
     pub(crate) async fn fetch_task_result(
         &self,
+        task_name: &str,
         task_id: TaskId,
     ) -> Result<Option<TaskResultSnapshot>> {
-        fetch_task_result_snapshot(&self.pool, &self.name, task_id).await
+        fetch_task_result_snapshot(&self.pool, &self.name, task_name, task_id).await
+    }
+
+    /// Verify that a durable typed reference still names the addressed logical task.
+    pub(crate) async fn ensure_task_ref(&self, task_name: &str, task_id: TaskId) -> Result<()> {
+        self.fetch_task_result(task_name, task_id).await?.ok_or(Error::TaskNotFound(task_id))?;
+        Ok(())
     }
 
     /// Retry a terminally failed logical task with one additional attempt.
@@ -502,7 +509,7 @@ fn queue_policy_from_row(row: &PgRow) -> Result<QueuePolicy> {
     }
 
     Ok(QueuePolicy {
-        name: row.get("name"),
+        queue_name: row.get("name"),
         cleanup_ttl: Duration::from_secs(cleanup_ttl_seconds),
         cleanup_limit,
     })

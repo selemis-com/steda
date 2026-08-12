@@ -156,7 +156,7 @@ mod tests {
             .cleanup()
             .await?
             .into_iter()
-            .map(|entry| (entry.name, entry.tasks_deleted))
+            .map(|entry| (entry.queue_name, entry.tasks_deleted))
             .collect();
         assert_eq!(cleanup.get(&first_name), Some(&1));
         assert_eq!(cleanup.get(&second_name), Some(&1));

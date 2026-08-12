@@ -111,11 +111,12 @@ pub(crate) async fn supervise_run(
 pub(crate) async fn fetch_task_result_snapshot(
     pool: &PgPool,
     queue_name: &str,
+    task_name: &str,
     task_id: TaskId,
 ) -> Result<Option<TaskResultSnapshot>> {
     let row = sqlx::query(
         r#"
-        SELECT state, result, failure_reason
+        SELECT name AS task_name, state, result, failure_reason
         FROM steda.get_task_result($1, $2)
         "#,
     )
@@ -128,6 +129,15 @@ pub(crate) async fn fetch_task_result_snapshot(
         return Ok(None);
     };
 
+    let persisted_task_name: String = row.get("task_name");
+    if persisted_task_name != task_name {
+        return Err(Error::TaskNameMismatch {
+            task_id,
+            expected: task_name.to_owned(),
+            actual: persisted_task_name,
+        });
+    }
+
     let state: String = row.get("state");
     let result: Option<Value> = row.get("result");
     let failure: Option<Value> = row.get("failure_reason");
@@ -136,11 +146,21 @@ pub(crate) async fn fetch_task_result_snapshot(
         "pending" => TaskResultSnapshot::Pending,
         "running" => TaskResultSnapshot::Running,
         "sleeping" => TaskResultSnapshot::Sleeping,
-        "completed" => TaskResultSnapshot::Completed { result: result.unwrap_or(Value::Null) },
-        "failed" => TaskResultSnapshot::Failed { failure: failure.unwrap_or(Value::Null) },
+        "completed" => TaskResultSnapshot::Completed {
+            result: result.ok_or_else(|| {
+                Error::Other(format!("completed task {task_id} has no persisted result"))
+            })?,
+        },
+        "failed" => TaskResultSnapshot::Failed {
+            failure: failure.ok_or_else(|| {
+                Error::Other(format!("failed task {task_id} has no persisted failure"))
+            })?,
+        },
         "cancelled" => TaskResultSnapshot::Cancelled,
         other => {
-            return Err(Error::InvalidOptions(format!("unknown task result state {other:?}")));
+            return Err(Error::Other(format!(
+                "PostgreSQL returned unknown task state {other:?} for task {task_id}"
+            )));
         }
     }))
 }
@@ -149,6 +169,7 @@ pub(crate) async fn fetch_task_result_snapshot(
 pub(crate) async fn await_task_result_snapshot(
     pool: &PgPool,
     queue_name: &str,
+    task_name: &str,
     task_id: TaskId,
     timeout: Option<Duration>,
 ) -> Result<TaskResultSnapshot> {
@@ -156,7 +177,7 @@ pub(crate) async fn await_task_result_snapshot(
     let mut delay = INITIAL_RESULT_BACKOFF;
 
     loop {
-        let snapshot = fetch_task_result_snapshot(pool, queue_name, task_id)
+        let snapshot = fetch_task_result_snapshot(pool, queue_name, task_name, task_id)
             .await?
             .ok_or_else(|| Error::TaskNotFound(task_id))?;
         if snapshot.is_terminal() {

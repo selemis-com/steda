@@ -305,7 +305,7 @@ pub use steda::{Steda, StedaBuilder};
 pub use task::{Spawn, SpawnedTask, Task, TaskHandle, TaskRef, TaskSnapshot};
 pub use types::{
     CancellationPolicy, Json, JsonObject, QueueCleanup, QueuePolicy, QueuePolicyOptions,
-    RetryStrategy, RunId, TaskId, TaskResultState, Timestamp,
+    RetryStrategy, RunId, TaskId, TaskState,
 };
 pub use worker::{TaskExecutor, TaskHandler, Worker, WorkerBuilder};
 pub use workflow::{Sleep, Step};

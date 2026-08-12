@@ -164,7 +164,7 @@ futures-util = { version = "0.3.32", default-features = false, features = [
 ] }
 log = "0.4.33"
 serde_json = "1.0.151"
-serde = "1.0.229"
+serde = { version = "1.0.229", features = ["derive"] }
 sqlx = { version = "0.9.0", default-features = false, features = [
   "macros",
   "migrate",
@@ -184,7 +184,6 @@ uuid = { version = "1.24.0", features = ["serde", "v7"] }
 [dev-dependencies]
 # Vendor
 proptest = "1.11.0"
-serde = { version = "1.0.229", features = ["derive"] }
 
 [features]
 default = []

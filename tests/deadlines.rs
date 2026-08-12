@@ -21,7 +21,7 @@ mod tests {
     use sqlx::{AssertSqlSafe, PgPool, Row};
     use steda::{
         Error, Result, RetryStrategy, RunId, Sleep, Steda, Step, Task, TaskContext, TaskId,
-        TaskResultState, TaskSnapshot,
+        TaskSnapshot, TaskState,
     };
     use time::OffsetDateTime;
 
@@ -361,7 +361,7 @@ mod tests {
         run_worker_for_claims(&worker, app.metrics(), 1).await?;
 
         let sleeping = spawned.snapshot().await?.expect("sleeping task must have a snapshot");
-        assert_eq!(sleeping.state(), TaskResultState::Sleeping);
+        assert_eq!(sleeping.state(), TaskState::Sleeping);
         assert!(!sleeping.is_terminal());
 
         let run_id = fetch_task(&pool, &queue, spawned.task_id()).await?.last_attempt_run;
@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         let completed = spawned.snapshot().await?.expect("completed task must have a snapshot");
-        assert_eq!(completed.state(), TaskResultState::Completed);
+        assert_eq!(completed.state(), TaskState::Completed);
         assert!(completed.is_terminal());
         assert_eq!(completed, TaskSnapshot::Completed { result: json!({"awake": true}) });
 

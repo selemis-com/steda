@@ -4,7 +4,6 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// JSON value type for task parameters, headers, checkpoints, and results.
@@ -109,9 +108,6 @@ impl FromStr for RunId {
         value.parse().map(Self::from_uuid)
     }
 }
-
-/// UTC timestamp type used for Postgres `TIMESTAMPTZ` values.
-pub type Timestamp = OffsetDateTime;
 
 /// Retry strategy for failed tasks.
 ///
@@ -273,7 +269,7 @@ impl QueuePolicyOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuePolicy {
     /// Queue name.
-    pub name: String,
+    pub queue_name: String,
 
     /// Terminal task cleanup TTL.
     pub cleanup_ttl: Duration,
@@ -282,20 +278,20 @@ pub struct QueuePolicy {
     pub cleanup_limit: u32,
 }
 
-/// Result of one automatic cleanup pass for a queue.
+/// Result of one retention cleanup pass for a queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueCleanup {
     /// Queue name.
-    pub name: String,
+    pub queue_name: String,
 
     /// Number of terminal tasks deleted.
     pub tasks_deleted: u32,
 }
 
-/// Task result state.
+/// Durable task state.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum TaskResultState {
+pub enum TaskState {
     /// Task is waiting to run.
     Pending,
 

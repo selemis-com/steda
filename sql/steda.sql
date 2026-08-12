@@ -775,6 +775,7 @@ CREATE OR REPLACE FUNCTION steda.get_task_result(
 )
 RETURNS TABLE (
     id uuid,
+    name text,
     state text,
     result jsonb,
     failure_reason jsonb
@@ -788,6 +789,7 @@ BEGIN
         $query$
         SELECT
             task.id,
+            task.name,
             task.state,
             CASE
                 WHEN task.state = 'completed' THEN run.result

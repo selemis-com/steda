@@ -158,7 +158,7 @@ mod tests {
             .policy()
             .await?
             .ok_or_else(|| Error::InvalidOptions("expected queue policy".to_owned()))?;
-        assert_eq!(policy.name, queue);
+        assert_eq!(policy.queue_name, queue);
         assert_eq!(policy.cleanup_ttl, Duration::from_secs(12_345));
         assert_eq!(policy.cleanup_limit, 77);
 
