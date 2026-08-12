@@ -11,7 +11,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     /// Error returned by `SQLx` while talking to Postgres.
-    #[error("Database error: {0}")]
+    #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
     /// Invalid queue or worker options.
@@ -55,11 +55,11 @@ pub enum Error {
     },
 
     /// Task intentionally suspended itself while sleeping.
-    #[error("Task suspended")]
+    #[error("task suspended")]
     Suspended,
 
     /// Task or run was cancelled.
-    #[error("Task cancelled")]
+    #[error("task cancelled")]
     Cancelled,
 
     /// Run had already failed when attempting a state transition.
@@ -83,7 +83,7 @@ pub enum Error {
     InvalidTaskHeaders(String),
 
     /// JSON serialization or deserialization failed.
-    #[error("Serialization error: {0}")]
+    #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
     /// Catch-all error for cases that do not deserve a dedicated variant.
