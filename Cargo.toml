@@ -11,6 +11,15 @@ homepage = "https://github.com/selemis-com/steda"
 documentation = "https://docs.rs/steda"
 keywords = ["tasks", "workflow", "postgres", "queue", "durable"]
 categories = ["asynchronous", "database"]
+include = [
+  "/src/**",
+  "/sql/**",
+  "/examples/**",
+  "/README.md",
+  "/LICENSE-APACHE",
+  "/LICENSE-MIT",
+  "/THIRD_PARTY_NOTICES.md",
+]
 
 [lints.rust]
 closure_returning_async_block = "warn"
