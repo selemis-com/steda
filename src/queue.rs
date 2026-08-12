@@ -367,24 +367,24 @@ pub(crate) fn normalize_spawn_options(options: SpawnConfig) -> Result<Map<String
     }
     if let Some(max_attempts) = options.max_attempts {
         payload.insert(
-            "max_attempts".to_owned(),
+            "maxAttempts".to_owned(),
             json!(database_positive_i32(max_attempts, "max_attempts")?),
         );
     }
     if let Some(retry_strategy) = options.retry_strategy {
-        payload.insert("retry_strategy".to_owned(), retry_strategy_json(retry_strategy)?);
+        payload.insert("retryStrategy".to_owned(), retry_strategy_json(retry_strategy)?);
     }
     if let Some(cancellation) = options.cancellation {
         let mut value = Map::new();
         if let Some(max_duration) = cancellation.max_duration {
             value.insert(
-                "max_duration".to_owned(),
+                "maxDuration".to_owned(),
                 json!(duration_seconds_i64(max_duration, "cancellation max_duration")?),
             );
         }
         if let Some(max_delay) = cancellation.max_delay {
             value.insert(
-                "max_delay".to_owned(),
+                "maxDelay".to_owned(),
                 json!(duration_seconds_i64(max_delay, "cancellation max_delay")?),
             );
         }
@@ -393,7 +393,7 @@ pub(crate) fn normalize_spawn_options(options: SpawnConfig) -> Result<Map<String
         }
     }
     if let Some(idempotency_key) = options.idempotency_key {
-        payload.insert("idempotency_key".to_owned(), Value::String(idempotency_key));
+        payload.insert("idempotencyKey".to_owned(), Value::String(idempotency_key));
     }
     Ok(payload)
 }
@@ -448,16 +448,16 @@ fn retry_strategy_json(strategy: RetryStrategy) -> Result<Value> {
     Ok(match strategy {
         RetryStrategy::Fixed { delay } => json!({
             "kind": "fixed",
-            "base_seconds": delay.as_secs_f64(),
+            "baseSeconds": delay.as_secs_f64(),
         }),
         RetryStrategy::Exponential { initial_delay, factor, max_delay } => {
             let mut value = Map::from_iter([
                 ("kind".to_owned(), Value::String("exponential".to_owned())),
-                ("base_seconds".to_owned(), json!(initial_delay.as_secs_f64())),
+                ("baseSeconds".to_owned(), json!(initial_delay.as_secs_f64())),
                 ("factor".to_owned(), json!(factor)),
             ]);
             if let Some(max_delay) = max_delay {
-                value.insert("max_seconds".to_owned(), json!(max_delay.as_secs_f64()));
+                value.insert("maxSeconds".to_owned(), json!(max_delay.as_secs_f64()));
             }
             Value::Object(value)
         }

@@ -67,9 +67,9 @@ mod tests {
 
         let task_id = TaskId::from_uuid(uuid::Uuid::now_v7());
         let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
-            "queue_name": app.name(),
-            "task_name": RESULT_PROBE.name(),
-            "task_id": task_id,
+            "queueName": app.name(),
+            "taskName": RESULT_PROBE.name(),
+            "taskId": task_id,
         }))?;
         let task = steda.task(&task_ref)?;
         assert_eq!(task.snapshot().await?, None);
@@ -87,9 +87,9 @@ mod tests {
 
         let task_id = TaskId::from_uuid(uuid::Uuid::now_v7());
         let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
-            "queue_name": app.name(),
-            "task_name": RESULT_PROBE.name(),
-            "task_id": task_id,
+            "queueName": app.name(),
+            "taskName": RESULT_PROBE.name(),
+            "taskId": task_id,
         }))?;
         let task = steda.task(&task_ref)?;
         let error = task
@@ -113,7 +113,7 @@ mod tests {
 
         let spawned = app.spawn(RESULT_PROBE, json!({})).await?;
         let mut encoded = serde_json::to_value(spawned.task_ref())?;
-        encoded["task_name"] = json!("different-task");
+        encoded["taskName"] = json!("different-task");
         let mismatched_ref: TaskRef<Value, Value> = serde_json::from_value(encoded)?;
         let mismatched = steda.task(&mismatched_ref)?;
 

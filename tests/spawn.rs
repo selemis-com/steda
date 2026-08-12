@@ -206,9 +206,9 @@ mod tests {
         for cancellation in [
             json!({}),
             json!({"unknown": 1}),
-            json!({"max_delay": -1}),
-            json!({"max_duration": 1.5}),
-            json!({"max_delay": "1"}),
+            json!({"maxDelay": -1}),
+            json!({"maxDuration": 1.5}),
+            json!({"maxDelay": "1"}),
         ] {
             let options = json!({"cancellation": cancellation});
             sqlx::query("SELECT id FROM steda.spawn_task($1, $2, '{}'::jsonb, $3)")

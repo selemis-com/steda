@@ -63,9 +63,9 @@ mod tests {
         let capped: f64 = sqlx::query_scalar("SELECT steda.retry_delay_seconds($1::jsonb, $2)")
             .bind(json!({
                 "kind": "exponential",
-                "base_seconds": 30.0,
+                "baseSeconds": 30.0,
                 "factor": 2.0,
-                "max_seconds": 3600.0
+                "maxSeconds": 3600.0
             }))
             .bind(i32::MAX)
             .fetch_one(&pool)
@@ -77,7 +77,7 @@ mod tests {
             sqlx::query_scalar("SELECT steda.retry_delay_seconds($1::jsonb, $2)")
                 .bind(json!({
                     "kind": "exponential",
-                    "base_seconds": 30.0,
+                    "baseSeconds": 30.0,
                     "factor": 2.0
                 }))
                 .bind(i32::MAX)
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(database_capped, f64::from(i32::MAX));
 
         let fixed: f64 = sqlx::query_scalar("SELECT steda.retry_delay_seconds($1::jsonb, $2)")
-            .bind(json!({"kind": "fixed", "base_seconds": 12.5}))
+            .bind(json!({"kind": "fixed", "baseSeconds": 12.5}))
             .bind(99_i32)
             .fetch_one(&pool)
             .await
@@ -108,9 +108,9 @@ mod tests {
         for strategy in [
             Value::Null,
             json!({"kind": "fixed"}),
-            json!({"kind": "exponential", "base_seconds": 30.0}),
-            json!({"kind": "none", "base_seconds": 0.0}),
-            json!({"kind": "fixed", "base_seconds": 1.0, "factor": 2.0}),
+            json!({"kind": "exponential", "baseSeconds": 30.0}),
+            json!({"kind": "none", "baseSeconds": 0.0}),
+            json!({"kind": "fixed", "baseSeconds": 1.0, "factor": 2.0}),
             json!({"kind": "immediate"}),
         ] {
             let result =

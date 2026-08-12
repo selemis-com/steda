@@ -15,15 +15,15 @@ RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
 AS $$
-    SELECT '{"kind":"exponential","base_seconds":30.0,"factor":2.0,"max_seconds":3600.0}'::jsonb;
+    SELECT '{"kind":"exponential","baseSeconds":30.0,"factor":2.0,"maxSeconds":3600.0}'::jsonb;
 $$;
 
 -- Validate a canonical retry strategy and calculate the delay for a failed attempt.
 --
 -- This is the single database authority for retry timing. Strategies must already
 -- have their canonical shape; defaults are resolved by spawn_task before storage.
--- Supported shapes are `none`, fixed delay (`base_seconds`), and exponential
--- delay (`base_seconds`, `factor`, and optional `max_seconds`). Unknown keys and
+-- Supported shapes are `none`, fixed delay (`baseSeconds`), and exponential
+-- delay (`baseSeconds`, `factor`, and optional `maxSeconds`). Unknown keys and
 -- non-finite/negative delays are rejected rather than ignored.
 CREATE OR REPLACE FUNCTION steda.retry_delay_seconds(
     strategy jsonb,
@@ -73,24 +73,24 @@ BEGIN
         SELECT keys.key
         INTO unknown_key
         FROM jsonb_object_keys(strategy) AS keys(key)
-        WHERE keys.key NOT IN ('kind', 'base_seconds')
+        WHERE keys.key NOT IN ('kind', 'baseSeconds')
         LIMIT 1;
 
         IF unknown_key IS NOT NULL THEN
             RAISE EXCEPTION 'fixed retry strategy does not support key "%"', unknown_key;
         END IF;
 
-        IF NOT strategy ? 'base_seconds' THEN
-            RAISE EXCEPTION 'fixed retry strategy requires base_seconds';
+        IF NOT strategy ? 'baseSeconds' THEN
+            RAISE EXCEPTION 'fixed retry strategy requires baseSeconds';
         END IF;
 
-        base_seconds := (strategy ->> 'base_seconds')::double precision;
+        base_seconds := (strategy ->> 'baseSeconds')::double precision;
         IF base_seconds IS NULL
             OR base_seconds::text IN ('NaN', 'Infinity', '-Infinity')
             OR base_seconds < 0
             OR base_seconds > maximum_delay_seconds
         THEN
-            RAISE EXCEPTION 'retry base_seconds must be finite and between 0 and 2147483647 seconds';
+            RAISE EXCEPTION 'retry baseSeconds must be finite and between 0 and 2147483647 seconds';
         END IF;
 
         RETURN base_seconds;
@@ -100,25 +100,25 @@ BEGIN
         SELECT keys.key
         INTO unknown_key
         FROM jsonb_object_keys(strategy) AS keys(key)
-        WHERE keys.key NOT IN ('kind', 'base_seconds', 'factor', 'max_seconds')
+        WHERE keys.key NOT IN ('kind', 'baseSeconds', 'factor', 'maxSeconds')
         LIMIT 1;
 
         IF unknown_key IS NOT NULL THEN
             RAISE EXCEPTION 'exponential retry strategy does not support key "%"', unknown_key;
         END IF;
 
-        IF NOT strategy ? 'base_seconds' THEN
-            RAISE EXCEPTION 'exponential retry strategy requires base_seconds';
+        IF NOT strategy ? 'baseSeconds' THEN
+            RAISE EXCEPTION 'exponential retry strategy requires baseSeconds';
         END IF;
         IF NOT strategy ? 'factor' THEN
             RAISE EXCEPTION 'exponential retry strategy requires factor';
         END IF;
 
-        base_seconds := (strategy ->> 'base_seconds')::double precision;
+        base_seconds := (strategy ->> 'baseSeconds')::double precision;
         retry_factor := (strategy ->> 'factor')::double precision;
         max_seconds := CASE
-            WHEN strategy ? 'max_seconds'
-                THEN (strategy ->> 'max_seconds')::double precision
+            WHEN strategy ? 'maxSeconds'
+                THEN (strategy ->> 'maxSeconds')::double precision
             ELSE maximum_delay_seconds
         END;
 
@@ -127,7 +127,7 @@ BEGIN
             OR base_seconds < 0
             OR base_seconds > maximum_delay_seconds
         THEN
-            RAISE EXCEPTION 'retry base_seconds must be finite and between 0 and 2147483647 seconds';
+            RAISE EXCEPTION 'retry baseSeconds must be finite and between 0 and 2147483647 seconds';
         END IF;
 
         IF retry_factor IS NULL
@@ -142,7 +142,7 @@ BEGIN
             OR max_seconds < 0
             OR max_seconds > maximum_delay_seconds
         THEN
-            RAISE EXCEPTION 'retry max_seconds must be finite and between 0 and 2147483647 seconds';
+            RAISE EXCEPTION 'retry maxSeconds must be finite and between 0 and 2147483647 seconds';
         END IF;
 
         IF base_seconds = 0 OR max_seconds = 0 THEN
@@ -191,20 +191,20 @@ BEGIN
     END IF;
 
     IF cancellation = '{}'::jsonb THEN
-        RAISE EXCEPTION 'cancellation policy must define max_delay or max_duration';
+        RAISE EXCEPTION 'cancellation policy must define maxDelay or maxDuration';
     END IF;
 
     SELECT keys.key
     INTO unknown_key
     FROM jsonb_object_keys(cancellation) AS keys(key)
-    WHERE keys.key NOT IN ('max_delay', 'max_duration')
+    WHERE keys.key NOT IN ('maxDelay', 'maxDuration')
     LIMIT 1;
 
     IF unknown_key IS NOT NULL THEN
         RAISE EXCEPTION 'cancellation policy does not support key "%"', unknown_key;
     END IF;
 
-    FOREACH unknown_key IN ARRAY ARRAY['max_delay', 'max_duration']
+    FOREACH unknown_key IN ARRAY ARRAY['maxDelay', 'maxDuration']
     LOOP
         IF cancellation ? unknown_key THEN
             IF jsonb_typeof(cancellation -> unknown_key) <> 'number' THEN
@@ -224,7 +224,7 @@ $$;
 
 -- Evaluate a task cancellation deadline at one authoritative database timestamp.
 --
--- Before a task starts, only max_delay applies. After its first claim, max_duration
+-- Before a task starts, only maxDelay applies. After its first claim, maxDuration
 -- applies for the remainder of the logical task, including retries and durable sleep.
 CREATE OR REPLACE FUNCTION steda.cancellation_due(
     cancellation jsonb,
@@ -239,15 +239,15 @@ AS $$
     SELECT CASE
         WHEN cancellation IS NULL THEN FALSE
         WHEN first_started_at IS NULL THEN coalesce(
-            (cancellation ->> 'max_delay')::bigint IS NOT NULL
+            (cancellation ->> 'maxDelay')::bigint IS NOT NULL
             AND extract(epoch FROM (observed_at - enqueue_at))
-                >= (cancellation ->> 'max_delay')::bigint,
+                >= (cancellation ->> 'maxDelay')::bigint,
             FALSE
         )
         ELSE coalesce(
-            (cancellation ->> 'max_duration')::bigint IS NOT NULL
+            (cancellation ->> 'maxDuration')::bigint IS NOT NULL
             AND extract(epoch FROM (observed_at - first_started_at))
-                >= (cancellation ->> 'max_duration')::bigint,
+                >= (cancellation ->> 'maxDuration')::bigint,
             FALSE
         )
     END;
@@ -364,7 +364,7 @@ BEGIN
     END IF;
 
     task_headers := options -> 'headers';
-    task_retry_strategy := options -> 'retry_strategy';
+    task_retry_strategy := options -> 'retryStrategy';
 
     IF task_headers = 'null'::jsonb OR task_headers = '{}'::jsonb THEN
         task_headers := NULL;
@@ -372,8 +372,8 @@ BEGIN
         RAISE EXCEPTION 'headers must be a JSON object';
     END IF;
 
-    IF options ? 'max_attempts' THEN
-        maximum_attempts := (options ->> 'max_attempts')::int;
+    IF options ? 'maxAttempts' THEN
+        maximum_attempts := (options ->> 'maxAttempts')::int;
 
         IF maximum_attempts IS NOT NULL AND maximum_attempts < 1 THEN
             RAISE EXCEPTION 'max_attempts must be >= 1';
@@ -381,7 +381,7 @@ BEGIN
     END IF;
 
     cancellation_policy := steda.validate_cancellation_policy(options -> 'cancellation');
-    idempotency_key := options ->> 'idempotency_key';
+    idempotency_key := options ->> 'idempotencyKey';
 
     maximum_attempts := coalesce(maximum_attempts, 5);
     task_retry_strategy := coalesce(task_retry_strategy, steda.default_retry_strategy());

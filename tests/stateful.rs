@@ -489,18 +489,18 @@ mod tests {
         let retry_strategy = match retry_mode % 3 {
             0 => None,
             1 => Some(json!({ "kind": "none" })),
-            _ => Some(json!({ "kind": "fixed", "base_seconds": 0.0 })),
+            _ => Some(json!({ "kind": "fixed", "baseSeconds": 0.0 })),
         };
         let cancellation = match cancellation_mode % 3 {
             0 => None,
-            1 => Some(json!({ "max_delay": cancellation_seconds })),
-            _ => Some(json!({ "max_duration": cancellation_seconds })),
+            1 => Some(json!({ "maxDelay": cancellation_seconds })),
+            _ => Some(json!({ "maxDuration": cancellation_seconds })),
         };
 
         let mut options = serde_json::Map::new();
-        options.insert("max_attempts".to_owned(), json!(max_attempts));
+        options.insert("maxAttempts".to_owned(), json!(max_attempts));
         if let Some(retry_strategy) = retry_strategy {
-            options.insert("retry_strategy".to_owned(), retry_strategy);
+            options.insert("retryStrategy".to_owned(), retry_strategy);
         }
         if let Some(cancellation) = cancellation {
             options.insert("cancellation".to_owned(), cancellation);
@@ -606,7 +606,7 @@ mod tests {
     fn max_duration_due(task: &TaskStatus, at: OffsetDateTime) -> bool {
         task.cancellation
             .as_ref()
-            .and_then(|policy| policy.get("max_duration"))
+            .and_then(|policy| policy.get("maxDuration"))
             .and_then(Value::as_i64)
             .zip(task.first_started_at)
             .is_some_and(|(seconds, first_started_at)| {
@@ -689,17 +689,17 @@ mod tests {
               AND task.name = ANY($1)
               AND NOT (
                 (
-                    (task.cancellation->>'max_delay')::bigint IS NOT NULL
+                    (task.cancellation->>'maxDelay')::bigint IS NOT NULL
                     AND task.first_started_at IS NULL
                     AND extract(epoch FROM (steda.current_time() - task.enqueue_at))
-                        >= (task.cancellation->>'max_delay')::bigint
+                        >= (task.cancellation->>'maxDelay')::bigint
                 )
                 OR
                 (
-                    (task.cancellation->>'max_duration')::bigint IS NOT NULL
+                    (task.cancellation->>'maxDuration')::bigint IS NOT NULL
                     AND task.first_started_at IS NOT NULL
                     AND extract(epoch FROM (steda.current_time() - task.first_started_at))
-                        >= (task.cancellation->>'max_duration')::bigint
+                        >= (task.cancellation->>'maxDuration')::bigint
                 )
               )
             "#,
@@ -730,17 +730,17 @@ mod tests {
             WHERE state IN ('pending', 'sleeping', 'running')
               AND (
                 (
-                    (cancellation->>'max_delay')::bigint IS NOT NULL
+                    (cancellation->>'maxDelay')::bigint IS NOT NULL
                     AND first_started_at IS NULL
                     AND extract(epoch FROM (steda.current_time() - enqueue_at))
-                        >= (cancellation->>'max_delay')::bigint
+                        >= (cancellation->>'maxDelay')::bigint
                 )
                 OR
                 (
-                    (cancellation->>'max_duration')::bigint IS NOT NULL
+                    (cancellation->>'maxDuration')::bigint IS NOT NULL
                     AND first_started_at IS NOT NULL
                     AND extract(epoch FROM (steda.current_time() - first_started_at))
-                        >= (cancellation->>'max_duration')::bigint
+                        >= (cancellation->>'maxDuration')::bigint
                 )
               )
             "#,
@@ -953,7 +953,7 @@ mod tests {
                 options
                     .as_object_mut()
                     .expect("spawn options are always an object")
-                    .insert("idempotency_key".to_owned(), json!(idempotency_key));
+                    .insert("idempotencyKey".to_owned(), json!(idempotency_key));
                 let now = current_time(connection).await?;
                 let spawned = spawn(connection, queue, name, payload, options.clone()).await?;
                 ensure(spawned.created, "fresh generated spawn was unexpectedly replayed")?;
@@ -1010,8 +1010,8 @@ mod tests {
                 )?;
                 let expected_cancellation_key = match cancellation % 3 {
                     0 => None,
-                    1 => Some("max_delay"),
-                    _ => Some("max_duration"),
+                    1 => Some("maxDelay"),
+                    _ => Some("maxDuration"),
                 };
                 match expected_cancellation_key {
                     None => ensure(
@@ -1345,7 +1345,7 @@ mod tests {
                 let duration_cancellation_due = before_task
                     .cancellation
                     .as_ref()
-                    .and_then(|policy| policy.get("max_duration"))
+                    .and_then(|policy| policy.get("maxDuration"))
                     .and_then(Value::as_i64)
                     .zip(before_task.first_started_at)
                     .is_some_and(|(max_duration, first_started_at)| {
@@ -1452,7 +1452,7 @@ mod tests {
                         "new retry run already has a lease",
                     )?;
                     if retry_kind == "fixed"
-                        && before_task.retry_strategy.get("base_seconds").and_then(Value::as_f64)
+                        && before_task.retry_strategy.get("baseSeconds").and_then(Value::as_f64)
                             == Some(0.0)
                     {
                         ensure(
@@ -1475,7 +1475,7 @@ mod tests {
                         before_task
                             .cancellation
                             .as_ref()
-                            .and_then(|policy| policy.get("max_duration"))
+                            .and_then(|policy| policy.get("maxDuration"))
                             .is_some(),
                         "retryable failure cancelled a task without max_duration",
                     )?;
@@ -1593,7 +1593,7 @@ mod tests {
                     ensure(
                         task.cancellation
                             .as_ref()
-                            .and_then(|policy| policy.get("max_duration"))
+                            .and_then(|policy| policy.get("maxDuration"))
                             .is_some(),
                         "completion was cancelled without a max_duration policy",
                     )?;
@@ -1996,9 +1996,9 @@ mod tests {
             let mut bindings = Bindings::default();
             let mut coverage = Coverage::default();
             let initial_options = json!({
-                "max_attempts": 3,
-                "retry_strategy": { "kind": "fixed", "base_seconds": 0.0 },
-                "idempotency_key": "stateful-initial"
+                "maxAttempts": 3,
+                "retryStrategy": { "kind": "fixed", "baseSeconds": 0.0 },
+                "idempotencyKey": "stateful-initial"
             });
             let initial =
                 spawn(&mut connection, &queue, "alpha", 0, initial_options.clone()).await?;

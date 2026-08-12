@@ -249,6 +249,7 @@ impl<Input, Output> fmt::Debug for TaskRef<Input, Output> {
 
 /// Stable serialized representation of a typed task reference.
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TaskRefWire {
     /// Queue containing the task.
     queue_name: String,
@@ -636,9 +637,9 @@ mod tests {
         assert_eq!(
             encoded,
             json!({
-                "queue_name": "queue",
-                "task_name": "reference-task",
-                "task_id": task_id,
+                "queueName": "queue",
+                "taskName": "reference-task",
+                "taskId": task_id,
             })
         );
 
@@ -654,9 +655,9 @@ mod tests {
 
         for task_name in ["   ".to_owned(), format!("{}é", "x".repeat(1023))] {
             let encoded = json!({
-                "queue_name": "queue",
-                "task_name": task_name,
-                "task_id": task_id,
+                "queueName": "queue",
+                "taskName": task_name,
+                "taskId": task_id,
             });
             let error = serde_json::from_value::<TaskRef<Value, Value>>(encoded)
                 .expect_err("invalid task name must be rejected");
@@ -664,9 +665,9 @@ mod tests {
         }
 
         let encoded = json!({
-            "queue_name": "   ",
-            "task_name": REFERENCE_TASK.name(),
-            "task_id": task_id,
+            "queueName": "   ",
+            "taskName": REFERENCE_TASK.name(),
+            "taskId": task_id,
         });
         let error = serde_json::from_value::<TaskRef<Value, Value>>(encoded)
             .expect_err("invalid queue name must be rejected");
