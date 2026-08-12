@@ -73,8 +73,6 @@ Please include tests for behavioral changes and update documentation when public
 
 Before submitting a pull request, run `make pr`. See [Development](#development) for the local development and verification workflow.
 
-This runs the repository's formatting, linting, tests, examples, doctests, and other verification checks.
-
 Pull requests may be asked to change substantially or be declined if the proposed design does not fit Steda's scope, even when the implementation itself is correct.
 
 ## Database changes
