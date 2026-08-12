@@ -48,13 +48,15 @@ Changes to Steda's PostgreSQL schema or database behavior require particular car
 
 Database changes should include appropriate migration coverage and tests for the relevant execution invariants. Avoid relying on application-side coordination where PostgreSQL can enforce the invariant directly.
 
-Once a migration has shipped in a published Steda release, do not modify or remove it. Introduce a new migration for subsequent schema changes instead. Published migrations must also remain safe to replay against schemas created by later releases because `steda.sql` reapplies the complete migration history during upgrades.
+Once a migration has shipped in a published Steda release, do not modify or remove it within that major release line. Introduce a new migration for subsequent schema changes instead. Published migrations must also remain safe to replay against schemas created by later releases in the same line because `steda.sql` reapplies the complete migration history during upgrades.
+
+A major release may deliberately establish a new storage generation or migration baseline instead of carrying historical replay constraints forward indefinitely. When practical, provide and test an explicit upgrade path from the previous major release. If an upgrade requires draining workers, rebuilding storage, or another coordinated step, document that requirement prominently in the release notes.
 
 ## Compatibility
 
 Steda is currently pre-1.0. Breaking changes may still be made when they materially improve the API or execution model.
 
-Even so, compatibility should not be broken casually. Pull requests that change public Rust APIs, SQL interfaces, persisted data, or documented behavior should explain why the break is worthwhile.
+Even so, compatibility should not be broken casually. Pull requests that change public Rust APIs, SQL interfaces, persisted data, or documented behavior should explain why the break is worthwhile. Database changes should preserve upgrades within a compatible release line; major-version boundaries may be used for intentional storage changes rather than accumulating compatibility machinery indefinitely. Mixed-version deployments must not be assumed safe unless they are explicitly supported and tested.
 
 ## Security
 

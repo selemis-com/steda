@@ -38,7 +38,7 @@ cargo add steda
 
 Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it to your PostgreSQL database before starting producers or workers.
 
-When upgrading Steda, apply the `steda.sql` file from the new release again.
+When upgrading Steda, apply the `steda.sql` file from the new release again before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script; any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
 
 ## Features
 
