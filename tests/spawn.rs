@@ -32,6 +32,48 @@ mod tests {
     const UNREGISTERED_IDEM: Task<Value, Value> = Task::new("unregistered-idem");
 
     #[sqlx::test(migrations = "./sql/migrations")]
+    async fn spawn_can_commit_atomically_with_application_state(pool: PgPool) -> Result<()> {
+        let queue = Steda::from_pool(pool.clone()).queue(unique_queue("transactional_spawn"))?;
+        queue.create().await?;
+        sqlx::query("CREATE TABLE application_changes (id integer PRIMARY KEY)")
+            .execute(&pool)
+            .await?;
+
+        let mut rolled_back = pool.begin().await?;
+        sqlx::query("INSERT INTO application_changes (id) VALUES (1)")
+            .execute(&mut *rolled_back)
+            .await?;
+        let rolled_back_task = queue
+            .spawn(UNREGISTERED_IDEM, json!({"change": 1}))
+            .submit(&mut rolled_back)
+            .await?;
+        rolled_back.rollback().await?;
+
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_changes").fetch_one(&pool).await?;
+        assert_eq!(application_rows, 0);
+        assert!(rolled_back_task.snapshot().await?.is_none());
+
+        let mut committed = pool.begin().await?;
+        sqlx::query("INSERT INTO application_changes (id) VALUES (2)")
+            .execute(&mut *committed)
+            .await?;
+        let committed_task = queue
+            .spawn(UNREGISTERED_IDEM, json!({"change": 2}))
+            .submit(&mut committed)
+            .await?;
+        committed.commit().await?;
+
+        let application_rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM application_changes").fetch_one(&pool).await?;
+        assert_eq!(application_rows, 1);
+        assert!(matches!(committed_task.snapshot().await?, Some(TaskSnapshot::Pending)));
+
+        queue.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
     async fn idempotent_spawn_replays_and_rejects_conflicts(pool: PgPool) -> Result<()> {
         let queue = unique_queue("idempotency");
         let app = Steda::from_pool(pool).queue(queue.clone())?;

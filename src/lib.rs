@@ -174,6 +174,13 @@
 //! task afterwards. Idempotent spawn protects **submission**; it does not deduplicate arbitrary
 //! side effects inside a handler.
 //!
+//! ## Transactional submission
+//!
+//! Awaiting [`Queue::spawn`] directly submits through the queue's shared pool. When application
+//! state and durable work must commit atomically, configure the same [`Spawn`] builder and call
+//! [`Spawn::submit`] with a caller-owned SQLx transaction. The task then becomes visible only when
+//! that transaction commits and disappears with the rest of the transaction on rollback.
+//!
 //! ## Cancellation deadlines
 //!
 //! [`CancellationPolicy`] `max_delay` limits how long a task may remain unstarted after enqueue.

@@ -118,6 +118,27 @@ The returned task keeps the output type attached, so results and snapshots remai
 
 ## Durable workflows
 
+### Transactional submission
+
+Awaiting `queue.spawn(...)` submits through the queue's shared pool. When application state and
+durable work must commit atomically, submit the same builder through a caller-owned SQLx
+transaction:
+
+```rust
+let mut tx = pool.begin().await?;
+
+// Write application state through `tx`.
+let task = queue
+    .spawn(RESIZE_IMAGE, input)
+    .submit(&mut tx)
+    .await?;
+
+tx.commit().await?;
+```
+
+The task becomes visible when the transaction commits. Rolling the transaction back also rolls
+back the task spawn.
+
 ### Idempotent submission
 
 Queue-scoped idempotency keys make repeated external delivery safe to submit:

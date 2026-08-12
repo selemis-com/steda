@@ -176,6 +176,62 @@ impl<'a, Input, Output> Spawn<'a, Input, Output> {
     }
 }
 
+impl<Input, Output> Spawn<'_, Input, Output>
+where
+    Input: Serialize + Send + 'static,
+    Output: DeserializeOwned + Send + 'static,
+{
+    /// Submit this task through a caller-owned SQLx transaction.
+    ///
+    /// Use this when durable task creation must commit atomically with application state in the
+    /// same `PostgreSQL` transaction. The returned task is not visible to other database sessions
+    /// until the caller commits the transaction, and rolling the transaction back also rolls back
+    /// the spawn.
+    ///
+    /// ```no_run
+    /// use serde::{Deserialize, Serialize};
+    /// use steda::{Result, Steda, Task};
+    ///
+    /// #[derive(Deserialize, Serialize)]
+    /// struct ReindexInput {
+    ///     object_id: String,
+    /// }
+    ///
+    /// #[derive(Deserialize, Serialize)]
+    /// struct ReindexOutput;
+    ///
+    /// const REINDEX: Task<ReindexInput, ReindexOutput> = Task::new("reindex");
+    ///
+    /// # async fn example(steda: Steda) -> Result<()> {
+    /// let queue = steda.queue("background")?;
+    /// let mut tx = steda.pool().begin().await?;
+    ///
+    /// let spawned = queue
+    ///     .spawn(REINDEX, ReindexInput { object_id: "object-123".to_owned() })
+    ///     .submit(&mut tx)
+    ///     .await?;
+    ///
+    /// tx.commit().await?;
+    /// let _ = spawned.task_id();
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the task cannot be serialized, spawn options are invalid, or the
+    /// database write fails. The caller remains responsible for committing or rolling back the
+    /// transaction.
+    pub async fn submit(
+        self,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<SpawnedTask<Input, Output>> {
+        self.queue
+            .spawn_typed_on(self.task, self.input, self.options, &mut **transaction)
+            .await
+    }
+}
+
 impl<'a, Input, Output> IntoFuture for Spawn<'a, Input, Output>
 where
     Input: Serialize + Send + 'static,

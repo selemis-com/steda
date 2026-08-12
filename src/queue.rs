@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, Row, postgres::PgRow};
 
 use crate::{
     db::{duration_seconds, fetch_task_result_snapshot},
@@ -110,7 +110,7 @@ impl Queue {
         Spawn::new(self, task, input)
     }
 
-    /// Serialize and persist a typed task spawn.
+    /// Serialize and persist a typed task spawn through this queue's pool.
     pub(crate) async fn spawn_typed<Input, Output>(
         &self,
         task: Task<Input, Output>,
@@ -121,8 +121,40 @@ impl Queue {
         Input: Serialize + Send + 'static,
         Output: serde::de::DeserializeOwned + Send + 'static,
     {
-        let spawned =
-            self.spawn_serialized(task.name(), serde_json::to_value(input)?, options).await?;
+        self.spawn_typed_with(task, input, options, &self.pool).await
+    }
+
+    /// Serialize and persist a typed task spawn through a caller-owned connection.
+    pub(crate) async fn spawn_typed_on<Input, Output>(
+        &self,
+        task: Task<Input, Output>,
+        input: Input,
+        options: SpawnConfig,
+        connection: &mut PgConnection,
+    ) -> Result<SpawnedTask<Input, Output>>
+    where
+        Input: Serialize + Send + 'static,
+        Output: serde::de::DeserializeOwned + Send + 'static,
+    {
+        self.spawn_typed_with(task, input, options, connection).await
+    }
+
+    /// Serialize and persist a typed task spawn through one SQLx executor.
+    async fn spawn_typed_with<'e, Input, Output, E>(
+        &self,
+        task: Task<Input, Output>,
+        input: Input,
+        options: SpawnConfig,
+        executor: E,
+    ) -> Result<SpawnedTask<Input, Output>>
+    where
+        Input: Serialize + Send + 'static,
+        Output: serde::de::DeserializeOwned + Send + 'static,
+        E: Executor<'e, Database = Postgres>,
+    {
+        let spawned = self
+            .spawn_serialized_with(task.name(), serde_json::to_value(input)?, options, executor)
+            .await?;
 
         Ok(SpawnedTask::new(TaskHandle::new(self.clone(), task, spawned.task_id), spawned.created))
     }
@@ -132,12 +164,16 @@ impl Queue {
     /// # Errors
     ///
     /// Returns an error if spawn options are invalid or the database write fails.
-    async fn spawn_serialized(
+    async fn spawn_serialized_with<'e, E>(
         &self,
         task_name: &str,
         params: Json,
         options: SpawnConfig,
-    ) -> Result<SpawnResult> {
+        executor: E,
+    ) -> Result<SpawnResult>
+    where
+        E: Executor<'e, Database = Postgres>,
+    {
         validate_task_name(task_name)?;
         let options_json = Value::Object(normalize_spawn_options(options)?);
 
@@ -151,7 +187,7 @@ impl Queue {
         .bind(task_name)
         .bind(params)
         .bind(options_json)
-        .fetch_one(&self.pool)
+        .fetch_one(executor)
         .await
         .map_err(map_sqlx_error)?;
 
