@@ -29,9 +29,9 @@ pub struct Steda {
 impl Steda {
     /// Connect to `PostgreSQL` with the default execution service.
     ///
-    /// Steda does not select a `SQLx` TLS backend itself. Applications connecting to a
-    /// TLS-only server should enable the appropriate `SQLx` TLS feature in their dependency
-    /// graph, or construct a configured [`PgPool`] and use [`Steda::from_pool`].
+    /// TLS support is opt-in through Steda's `tls-rustls` and `tls-native-tls` crate features.
+    /// Applications that already configure their own [`PgPool`] can use [`Steda::from_pool`]
+    /// instead.
     ///
     /// # Errors
     ///

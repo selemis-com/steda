@@ -8,6 +8,16 @@
 //!
 //! Steda requires `PostgreSQL` 18 or later.
 //!
+//! # Installation
+//!
+//! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
+//! database before producers or workers start. Reapply the new release's `steda.sql` when
+//! upgrading. [`migrate`] is available when an application prefers to apply the bundled schema
+//! programmatically.
+//!
+//! Steda has no default crate features. Enable `tls-rustls` or `tls-native-tls` when
+//! [`Steda::connect`] needs TLS support.
+//!
 //! # Quick start
 //!
 //! A task is a small constant value that couples a stable persisted name to serializable input
@@ -32,7 +42,6 @@
 //!
 //! # async fn example() -> Result<()> {
 //! let steda = Steda::connect("postgres://localhost/app").await?;
-//! steda::migrate(steda.pool()).await?;
 //!
 //! let queue = steda.queue("default")?;
 //! queue.create().await?;
@@ -144,6 +153,13 @@
 //! current worker execution slot while polling, so use them for bounded dependencies rather than
 //! as a generic long-term suspension mechanism.
 //!
+//! ## Durable compatibility
+//!
+//! Persisted task names, step names, and their serialized input, output, and checkpoint values are
+//! part of a workflow's durable compatibility boundary. Keep their serialization compatible while
+//! old work may still exist, or introduce a new stable task or step name for an incompatible
+//! version.
+//!
 //! # Submission guarantees
 //!
 //! ## Idempotent spawn
@@ -173,9 +189,9 @@
 //!
 //! ## Schema and queue lifecycle
 //!
-//! Run [`migrate`] before code that depends on a new Steda schema begins spawning or claiming
-//! work. Small installations may migrate at application startup; larger deployments commonly run
-//! migrations as a separate release job.
+//! Apply the `sql/steda.sql` file from the Steda release before code that depends on that schema
+//! begins spawning or claiming work. Apply the new release's file again when upgrading. Applications
+//! that prefer programmatic schema management can use [`migrate`].
 //!
 //! [`Steda::queue`] creates a lightweight handle only. [`Queue::create`] creates its durable
 //! queue-specific `PostgreSQL` storage and is idempotent for a healthy existing queue. Repeated

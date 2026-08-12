@@ -49,7 +49,7 @@ jobs:
           cache-on-failure: true
 
       - name: Check MSRV
-        run: cargo +1.95 check --workspace --all-targets --locked
+        run: cargo +1.95 check --workspace --all-targets --all-features --locked
 
   test-unit:
     runs-on: ubuntu-latest

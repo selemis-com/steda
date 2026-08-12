@@ -183,6 +183,12 @@ ctx.sleep_for(SETTLEMENT_WINDOW, Duration::from_secs(30)).await?;
 When the wake time arrives, execution starts again from the handler entry point. Earlier
 checkpoints and sleeps replay until execution reaches new work.
 
+### Durable compatibility
+
+Task names, step names, and their serialized input, output, and checkpoint values are persisted
+workflow contracts. Keep their serialization compatible while old work may still exist, or use a
+new stable task or step name for an incompatible version.
+
 ### Provisioned execution
 
 [`TaskExecutor`](https://docs.rs/steda/latest/steda/trait.TaskExecutor.html) allows a worker to

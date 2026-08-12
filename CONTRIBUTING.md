@@ -46,6 +46,8 @@ Changes to Steda's PostgreSQL schema or database behavior require particular car
 
 Database changes should include appropriate migration coverage and tests for the relevant execution invariants. Avoid relying on application-side coordination where PostgreSQL can enforce the invariant directly.
 
+Once a migration has shipped in a published Steda release, do not modify or remove it. Introduce a new migration for subsequent schema changes instead.
+
 ## Compatibility
 
 Steda is currently pre-1.0. Breaking changes may still be made when they materially improve the API or execution model.
