@@ -2159,7 +2159,7 @@ Apache License 2.0
 - [hex]( https://github.com/KokaKiwi/rust-hex ) 0.4.3
 - [native-tls]( https://github.com/rust-native-tls/rust-native-tls ) 0.2.18
 - [openssl-macros]( https://crates.io/crates/openssl-macros ) 0.1.1
-- [openssl]( https://github.com/rust-openssl/rust-openssl ) 0.10.76
+- [openssl]( https://github.com/rust-openssl/rust-openssl ) 0.10.81
 - [quick-error]( http://github.com/tailhook/quick-error ) 1.2.3
 - [stringprep]( https://github.com/sfackler/rust-stringprep ) 0.1.5
 
@@ -5932,7 +5932,7 @@ THE SOFTWARE.
 MIT License
 
 #### Used by
-- [openssl-sys]( https://github.com/rust-openssl/rust-openssl ) 0.9.112
+- [openssl-sys]( https://github.com/rust-openssl/rust-openssl ) 0.9.117
 
 #### License
 ```
