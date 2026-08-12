@@ -29,7 +29,7 @@ mod tests {
     use time::{OffsetDateTime, SignedDuration};
     use uuid::Uuid;
 
-    use super::common::unique_queue;
+    use super::common::{INSTALL_FAKE_CLOCK_SQL, unique_queue};
 
     type BoxError = Box<dyn StdError + Send + Sync>;
     type StatefulResult<T> = Result<T, BoxError>;
@@ -454,6 +454,7 @@ mod tests {
     }
 
     async fn set_initial_time(connection: &mut PgConnection) -> StatefulResult<()> {
+        sqlx::query(INSTALL_FAKE_CLOCK_SQL).execute(&mut *connection).await?;
         sqlx::query("SELECT set_config('steda.fake_now', $1, false)")
             .bind(INITIAL_FAKE_NOW)
             .execute(&mut *connection)

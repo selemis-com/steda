@@ -27,3 +27,31 @@ pub(crate) fn unique_queue(prefix: &str) -> String {
 
     format!("{prefix}_{suffix}")
 }
+
+/// Replace the production clock with the session-overridable clock used by deterministic tests.
+pub(crate) const INSTALL_FAKE_CLOCK_SQL: &str = r#"
+CREATE OR REPLACE FUNCTION steda.current_time()
+RETURNS timestamptz
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    configured_time text;
+BEGIN
+    configured_time := current_setting('steda.fake_now', true);
+
+    IF configured_time IS NOT NULL AND length(trim(configured_time)) > 0 THEN
+        RETURN configured_time::timestamptz;
+    END IF;
+
+    RETURN clock_timestamp();
+END;
+$$
+"#;
+
+/// Install the deterministic clock override into this test database.
+#[allow(dead_code, clippy::allow_attributes, reason = "shared helper is not used by every test")]
+pub(crate) async fn install_fake_clock(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(INSTALL_FAKE_CLOCK_SQL).execute(pool).await?;
+    Ok(())
+}

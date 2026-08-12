@@ -35,27 +35,12 @@
 CREATE SCHEMA IF NOT EXISTS steda;
 
 -- Return the canonical database timestamp used for durable state transitions.
---
--- Production calls use `clock_timestamp()`. Tests may override the clock for
--- the current PostgreSQL session through `steda.fake_now`, which allows lease,
--- retry, deadline, sleep, and retention behavior to be exercised
--- deterministically without changing production semantics.
 CREATE OR REPLACE FUNCTION steda.current_time()
 RETURNS timestamptz
-LANGUAGE plpgsql
+LANGUAGE sql
 VOLATILE
 AS $$
-DECLARE
-    configured_time text;
-BEGIN
-    configured_time := current_setting('steda.fake_now', true);
-
-    IF configured_time IS NOT NULL AND length(trim(configured_time)) > 0 THEN
-        RETURN configured_time::timestamptz;
-    END IF;
-
-    RETURN clock_timestamp();
-END;
+    SELECT clock_timestamp();
 $$;
 
 -- Registry of logical Steda queues.

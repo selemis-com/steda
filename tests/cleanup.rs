@@ -16,7 +16,10 @@ mod tests {
     use steda::{Error, QueuePolicyOptions, Result, Steda, Step, Task, TaskContext, TaskSnapshot};
     use tokio::time::timeout;
 
-    use super::{common::unique_queue, worker_support::run_worker_for_claims};
+    use super::{
+        common::{install_fake_clock, unique_queue},
+        worker_support::run_worker_for_claims,
+    };
 
     const CLEANUP_CHECKPOINT: Step<Value> = Step::new("cleanup-checkpoint");
 
@@ -181,6 +184,7 @@ mod tests {
         let spawned = app.spawn(CLEANUP_TEST_TASK, json!({})).await?;
         let tasks_table = relation_name("tasks", &queue);
         let runs_table = relation_name("runs", &queue);
+        install_fake_clock(&pool).await?;
         let mut connection = pool.acquire().await?;
 
         sqlx::query("SELECT set_config('steda.fake_now', '2026-01-01T00:00:00Z', false)")

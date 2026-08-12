@@ -22,7 +22,10 @@ mod tests {
     use steda::{Error, Result, RetryStrategy, RunId, Steda, Task};
     use time::OffsetDateTime;
 
-    use super::{common::unique_queue, worker_support::run_worker_for_claims};
+    use super::{
+        common::{install_fake_clock, unique_queue},
+        worker_support::run_worker_for_claims,
+    };
 
     const CLAIMED_ONLY: Task<Value, Value> = Task::new("claimed-only");
 
@@ -35,6 +38,7 @@ mod tests {
     const NEVER_RETRY: Task<Value, Value> = Task::new("never-retry");
 
     async fn set_fake_now(pool: &PgPool, now: OffsetDateTime) -> Result<()> {
+        install_fake_clock(pool).await?;
         let mut connections = Vec::new();
         for _ in 0..pool.options().get_max_connections() {
             let mut connection = pool.acquire().await?;
