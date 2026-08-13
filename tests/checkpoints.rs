@@ -51,6 +51,7 @@ mod tests {
         let rows = sqlx::query(AssertSqlSafe(query)).bind(task_id).fetch_all(pool).await?;
         Ok(rows.into_iter().map(|row| (row.get("name"), row.get("state"))).collect())
     }
+
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn step_checkpoint_is_reused_after_retry(pool: PgPool) -> Result<()> {
         let queue = unique_queue("checkpoints");
