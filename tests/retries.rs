@@ -58,6 +58,7 @@ mod tests {
         };
         assert_eq!(database_error.code().as_deref(), Some(expected));
     }
+
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn retry_delay_handles_fixed_none_and_large_exponential_values(pool: PgPool) {
         let capped: f64 = sqlx::query_scalar("SELECT steda.retry_delay_seconds($1::jsonb, $2)")

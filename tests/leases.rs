@@ -73,6 +73,7 @@ mod tests {
         };
         assert_eq!(database_error.code().as_deref(), Some(expected));
     }
+
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn expired_claim_rejects_all_worker_owned_transitions(pool: PgPool) -> Result<()> {
         let queue = unique_queue("lease_fence_sql");

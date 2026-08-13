@@ -35,6 +35,7 @@ mod tests {
         .fetch_one(pool)
         .await?)
     }
+
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn queue_operations(pool: PgPool) -> Result<()> {
         let queue = unique_queue("queue_ops");
