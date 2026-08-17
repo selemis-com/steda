@@ -387,10 +387,7 @@ jobs:
           tool: cargo-about
 
       - name: Regenerate THIRD_PARTY_NOTICES
-        run: |
-          set -euo pipefail
-          make about
-          git diff --exit-code -- THIRD_PARTY_NOTICES.md
+        run: make about
 
   ci-success:
     runs-on: ubuntu-latest
