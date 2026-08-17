@@ -5418,8 +5418,8 @@ Apache License 2.0
 - [sqlx-postgres]( https://github.com/launchbadge/sqlx ) 0.9.0
 - [syn]( https://github.com/dtolnay/syn ) 2.0.119
 - [syn]( https://github.com/dtolnay/syn ) 3.0.3
-- [thiserror-impl]( https://github.com/dtolnay/thiserror ) 2.0.19
-- [thiserror]( https://github.com/dtolnay/thiserror ) 2.0.19
+- [thiserror-impl]( https://github.com/dtolnay/thiserror ) 2.0.20
+- [thiserror]( https://github.com/dtolnay/thiserror ) 2.0.20
 - [time-core]( https://github.com/time-rs/time ) 0.1.9
 - [time-macros]( https://github.com/time-rs/time ) 0.2.32
 - [time]( https://github.com/time-rs/time ) 0.3.55
