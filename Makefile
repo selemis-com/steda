@@ -92,7 +92,7 @@ test-examples: ## Build and run all runnable examples.
 	done
 
 .PHONY: test
-test: ## Run the default test suite, excluding stateful fuzz tests.
+test: ## Run deterministic, example, stateful, and documentation tests.
 	$(MAKE) test-unit && \
 	$(MAKE) test-examples && \
 	$(MAKE) test-stateful && \
