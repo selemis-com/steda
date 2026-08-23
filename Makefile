@@ -94,6 +94,8 @@ test-examples: ## Build and run all runnable examples.
 .PHONY: test
 test: ## Run the default test suite, excluding stateful fuzz tests.
 	$(MAKE) test-unit && \
+	$(MAKE) test-examples && \
+	$(MAKE) test-stateful && \
 	$(MAKE) test-doc
 
 .PHONY: test-coverage
@@ -206,8 +208,6 @@ pr: ## Run all checks and tests.
 	$(MAKE) check && \
 	$(MAKE) lint && \
 	$(MAKE) test && \
-	$(MAKE) test-examples && \
-	$(MAKE) test-stateful && \
 	$(MAKE) doc && \
 	$(MAKE) about && \
 	$(MAKE) sql
