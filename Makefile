@@ -11,10 +11,10 @@ PROFILE ?= dev
 STATEFUL_CASES ?= 64
 
 # Minimum number of operations generated per PostgreSQL history.
-STATEFUL_MIN_STEPS ?= 32
+STATEFUL_MIN_STEPS ?= 128
 
 # Maximum number of operations generated per PostgreSQL history.
-STATEFUL_STEPS ?= 96
+STATEFUL_STEPS ?= 256
 
 # Optional deterministic Proptest seed for reproducing a campaign.
 STATEFUL_SEED ?=
@@ -92,10 +92,8 @@ test-examples: ## Build and run all runnable examples.
 	done
 
 .PHONY: test
-test: ## Run deterministic, example, stateful, and documentation tests.
+test: ## Run the default test suite, excluding stateful fuzz tests.
 	$(MAKE) test-unit && \
-	$(MAKE) test-examples && \
-	$(MAKE) test-stateful && \
 	$(MAKE) test-doc
 
 .PHONY: test-coverage
@@ -208,6 +206,8 @@ pr: ## Run all checks and tests.
 	$(MAKE) check && \
 	$(MAKE) lint && \
 	$(MAKE) test && \
+	$(MAKE) test-examples && \
+	$(MAKE) test-stateful && \
 	$(MAKE) doc && \
 	$(MAKE) about && \
 	$(MAKE) sql
