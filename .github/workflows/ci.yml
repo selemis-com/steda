@@ -386,8 +386,11 @@ jobs:
         with:
           tool: cargo-about
 
-      - name: Regenerate THIRD_PARTY_NOTICES
-        run: make about
+      - name: Check THIRD_PARTY_NOTICES is up to date
+        run: |
+          set -euo pipefail
+          make about
+          git diff --exit-code -- THIRD_PARTY_NOTICES.md
 
   ci-success:
     runs-on: ubuntu-latest
