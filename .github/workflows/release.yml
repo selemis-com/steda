@@ -229,4 +229,4 @@ jobs:
             sql/steda.sql \
             --verify-tag \
             --generate-notes \
-            --title "Steda $TAG"
+            --title "$TAG"
