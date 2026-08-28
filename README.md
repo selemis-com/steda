@@ -36,9 +36,13 @@ Steda requires PostgreSQL 18+. See [MSRV](#msrv) for supported Rust versions.
 cargo add steda
 ```
 
-Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it to your PostgreSQL database before starting producers or workers.
+Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it atomically before starting producers or workers:
 
-When upgrading Steda, apply the `steda.sql` file from the new release again before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script; any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
+```sh
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f steda.sql
+```
+
+When upgrading Steda, apply the new release's `steda.sql` the same way before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script; any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
 
 ## Features
 
@@ -266,7 +270,12 @@ Steda uses PostgreSQL invoker privileges and creates queue storage dynamically. 
 deployment uses one database role to run migrations, provision queues, and execute Steda
 operations. Deployments that separate migration, provisioning, and runtime roles must grant the
 required schema, function, and queue-table privileges explicitly; Steda does not install a
-least-privilege role split automatically.
+least-privilege role split automatically. The runtime role is trusted: direct writes to
+Steda-managed tables bypass the transition functions and their invariants. Queues are namespaces,
+not tenant-security boundaries, and `TaskRef` values are locators rather than authorization tokens.
+
+Task inputs, results, checkpoints, and failure messages are durable database data. In particular,
+handler errors and string panic messages can be persisted, so they should not contain secrets.
 
 ## Tower middleware
 

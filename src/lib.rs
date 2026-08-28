@@ -11,8 +11,9 @@
 //! # Installation
 //!
 //! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
-//! database before producers or workers start. Reapply the new release's `steda.sql` when
-//! upgrading.
+//! database before producers or workers start. Apply it atomically; with `psql`, use
+//! `--single-transaction -v ON_ERROR_STOP=1`. Reapply the new release's `steda.sql` the same way
+//! when upgrading.
 //!
 //! Steda has no default crate features. Enable `tls-rustls` or `tls-native-tls` when
 //! [`Steda::connect`] needs TLS support.
@@ -222,10 +223,10 @@
 //! queue. Multiple worker processes can consume the same queue concurrently; `PostgreSQL` remains
 //! the ownership authority.
 //!
-//! [`Worker::run_until`] stops new claims when its shutdown future resolves and drains attempts
-//! already executing. An abrupt process stop is also state-machine safe because finite leases
-//! allow later recovery, but graceful shutdown avoids waiting for lease expiry when current work
-//! can finish normally.
+//! [`Worker::run_until`] stops new claims when its shutdown future resolves and waits for attempts
+//! already executing to finish; there is no built-in drain timeout. An abrupt process stop is also
+//! state-machine safe because finite leases allow later recovery, but graceful shutdown avoids
+//! waiting for lease expiry when current work can finish normally.
 //!
 //! ## Cleanup and retention
 //!
@@ -262,6 +263,14 @@
 //! the entire handler lifetime. Long external calls and durable workflow code therefore do not pin
 //! one database connection merely because a task is running. Size the application's pool for
 //! aggregate database activity rather than reserving one connection per worker slot.
+//!
+//! ## Database trust boundary
+//!
+//! Steda's runtime database role is trusted: direct writes to Steda-managed tables bypass the
+//! transition functions and their invariants. Queues are namespaces rather than tenant-security
+//! boundaries, and [`TaskRef`] values are durable locators rather than authorization tokens.
+//! Handler error messages and string panic messages may be persisted as failure data, so they
+//! should not contain secrets.
 //!
 //! # Examples
 //!
