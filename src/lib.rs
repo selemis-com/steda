@@ -107,8 +107,9 @@
 //! This is one execution path, not two durability models. The long-lived Steda worker still owns
 //! the claim, lease supervision, cancellation observation, retry policy, and terminal database
 //! transition. A custom executor only decides **where one already-claimed attempt computes**.
-//! Returning an error from a custom executor is therefore an ordinary failed attempt. If the
-//! worker process itself disappears, recovery still follows lease expiry.
+//! Returning an error from a custom executor is therefore an ordinary failed attempt. Handler
+//! error messages and string panic messages may be persisted as failure data, so they should not
+//! contain secrets. If the worker process itself disappears, recovery still follows lease expiry.
 //! Steda may drop the executor future when supervision observes cancellation, suspension, or
 //! lease loss; executors that provision external compute must make that drop terminate or fence
 //! the external work.
@@ -263,14 +264,6 @@
 //! the entire handler lifetime. Long external calls and durable workflow code therefore do not pin
 //! one database connection merely because a task is running. Size the application's pool for
 //! aggregate database activity rather than reserving one connection per worker slot.
-//!
-//! ## Database trust boundary
-//!
-//! Steda's runtime database role is trusted: direct writes to Steda-managed tables bypass the
-//! transition functions and their invariants. Queues are namespaces rather than tenant-security
-//! boundaries, and [`TaskRef`] values are durable locators rather than authorization tokens.
-//! Handler error messages and string panic messages may be persisted as failure data, so they
-//! should not contain secrets.
 //!
 //! # Examples
 //!

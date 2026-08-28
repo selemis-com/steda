@@ -270,12 +270,10 @@ Steda uses PostgreSQL invoker privileges and creates queue storage dynamically. 
 deployment uses one database role to run migrations, provision queues, and execute Steda
 operations. Deployments that separate migration, provisioning, and runtime roles must grant the
 required schema, function, and queue-table privileges explicitly; Steda does not install a
-least-privilege role split automatically. The runtime role is trusted: direct writes to
-Steda-managed tables bypass the transition functions and their invariants. Queues are namespaces,
-not tenant-security boundaries, and `TaskRef` values are locators rather than authorization tokens.
+least-privilege role split automatically.
 
-Task inputs, results, checkpoints, and failure messages are durable database data. In particular,
-handler errors and string panic messages can be persisted, so they should not contain secrets.
+Handler errors and string panic messages can be persisted as failure data, so they should not
+contain secrets.
 
 ## Tower middleware
 
