@@ -64,6 +64,11 @@
 //!
 //! # Execution model
 //!
+//! Steda provides **at-least-once execution**. A logical task may run more than once after retries
+//! or lease recovery. `PostgreSQL` fencing prevents stale attempts from committing Steda state,
+//! but arbitrary external side effects can still repeat and need their own idempotency or fencing
+//! when that matters.
+//!
 //! ## Logical tasks and attempts
 //!
 //! One spawn creates one **logical task** identified by [`TaskId`]. Each execution try is a
@@ -147,8 +152,9 @@
 //! its decoded output under an internal identity derived from the target queue and task ID. A
 //! completed wait can therefore replay if the parent later retries.
 //!
-//! Same-queue waits are rejected because a finite worker pool could otherwise be filled entirely
-//! by parents waiting for children that need those same slots. Cross-queue waits retain the
+//! Same-queue task execution is supported; same-queue waits are rejected because a finite worker
+//! pool could otherwise be filled entirely by parents waiting for children that need those same
+//! slots. Cross-queue waits retain the
 //! current worker execution slot while polling, so use them for bounded dependencies rather than
 //! as a generic long-term suspension mechanism.
 //!
@@ -157,7 +163,8 @@
 //! Persisted task names, step names, sleep names, and their serialized input, output, and
 //! checkpoint values are part of a workflow's durable compatibility boundary. Keep their
 //! serialization compatible while old work may still exist, or introduce a new stable task, step,
-//! or sleep name for an incompatible version.
+//! or sleep name for an incompatible version. Serialized [`TaskRef`] values contain only the queue
+//! name, task name, and [`TaskId`]; their Rust generic parameters are not persisted type metadata.
 //!
 //! # Submission guarantees
 //!

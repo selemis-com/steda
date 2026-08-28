@@ -114,7 +114,9 @@ let output = task.result().await?;
 println!("{}", output.resized_key);
 ```
 
-The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference that keeps the queue, task name, task ID, and Rust input/output types together across restarts. Producer and worker processes share the same `Task` constant and PostgreSQL state; no runtime task registry is required.
+The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference containing the queue, task name, and task ID; its Rust input/output types are compile-time information and are not encoded in the serialized reference. Producer and worker processes share the same `Task` constant and PostgreSQL state; no runtime task registry is required.
+
+Steda provides **at-least-once execution**. A logical task may run more than once after retries or lease recovery. PostgreSQL fencing prevents stale attempts from committing Steda state, but arbitrary external side effects can still repeat and need their own idempotency or fencing when that matters.
 
 ## Durable workflows
 
