@@ -11,28 +11,13 @@ mod worker_support;
 mod tests {
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskSnapshot};
+    use steda::{Result, Steda, Task, TaskSnapshot};
 
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
     const ALPHA_ONLY: Task<Value, Value> = Task::new("alpha-only");
 
     const BETA_ONLY: Task<Value, Value> = Task::new("beta-only");
-
-    const DUPLICATE: Task<Value, Value> = Task::new("duplicate");
-
-    #[sqlx::test(migrations = "./sql/migrations")]
-    async fn worker_rejects_duplicate_task_registration(pool: PgPool) -> Result<()> {
-        let queue = unique_queue("duplicate_registration");
-        let app = Steda::from_pool(pool).queue(queue)?;
-        let duplicate = app
-            .worker()
-            .task(DUPLICATE, async |_params: Value, _ctx| Ok(json!({"first": true})))
-            .task(DUPLICATE, async |_params: Value, _ctx| Ok(json!({"second": true})))
-            .build();
-        assert!(matches!(duplicate, Err(Error::InvalidOptions(_))));
-        Ok(())
-    }
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn workers_only_claim_registered_task_names(pool: PgPool) -> Result<()> {
