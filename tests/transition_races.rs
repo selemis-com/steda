@@ -27,13 +27,12 @@ mod tests {
     ) -> std::result::Result<(), sqlx::Error> {
         match transition {
             TerminalTransition::Complete => {
-                let completed: bool =
-                    sqlx::query_scalar("SELECT steda.complete_run($1, $2, $3)")
-                        .bind(queue)
-                        .bind(run_id)
-                        .bind(json!({"ok": true}))
-                        .fetch_one(pool)
-                        .await?;
+                let completed: bool = sqlx::query_scalar("SELECT steda.complete_run($1, $2, $3)")
+                    .bind(queue)
+                    .bind(run_id)
+                    .bind(json!({"ok": true}))
+                    .fetch_one(pool)
+                    .await?;
                 assert!(completed);
             }
             TerminalTransition::Fail => {
