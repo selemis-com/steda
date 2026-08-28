@@ -11,7 +11,7 @@
 //! # Installation
 //!
 //! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
-//! database before producers or workers start. Apply it atomically; with `psql`, use
+//! database before producers or workers start. Apply it atomically. With `psql`, use
 //! `--single-transaction -v ON_ERROR_STOP=1`. Reapply the new release's `steda.sql` the same way
 //! when upgrading.
 //!
@@ -154,7 +154,7 @@
 //! its decoded output under an internal identity derived from the target queue and task ID. A
 //! completed wait can therefore replay if the parent later retries.
 //!
-//! Same-queue task execution is supported; same-queue waits are rejected because a finite worker
+//! Same-queue task execution is supported. Same-queue waits are rejected because a finite worker
 //! pool could otherwise be filled entirely by parents waiting for children that need those same
 //! slots. Cross-queue waits retain the
 //! current worker execution slot while polling, so use them for bounded dependencies rather than
@@ -166,7 +166,7 @@
 //! checkpoint values are part of a workflow's durable compatibility boundary. Keep their
 //! serialization compatible while old work may still exist, or introduce a new stable task, step,
 //! or sleep name for an incompatible version. Serialized [`TaskRef`] values contain only the queue
-//! name, task name, and [`TaskId`]; their Rust generic parameters are not persisted type metadata.
+//! name, task name, and [`TaskId`]. Their Rust generic parameters are not persisted type metadata.
 //!
 //! # Submission guarantees
 //!
@@ -225,7 +225,7 @@
 //! the ownership authority.
 //!
 //! [`Worker::run_until`] stops new claims when its shutdown future resolves and waits for attempts
-//! already executing to finish; there is no built-in drain timeout. An abrupt process stop is also
+//! already executing to finish. There is no built-in drain timeout. An abrupt process stop is also
 //! state-machine safe because finite leases allow later recovery, but graceful shutdown avoids
 //! waiting for lease expiry when current work can finish normally.
 //!

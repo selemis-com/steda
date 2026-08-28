@@ -42,7 +42,7 @@ Download `steda.sql` from the matching [Steda release](https://github.com/selemi
 psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f steda.sql
 ```
 
-When upgrading Steda, apply the new release's `steda.sql` the same way before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script; any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
+When upgrading Steda, apply the new release's `steda.sql` the same way before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script. Any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
 
 ## Features
 
@@ -118,7 +118,7 @@ let output = task.result().await?;
 println!("{}", output.resized_key);
 ```
 
-The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference containing the queue, task name, and task ID; its Rust input/output types are compile-time information and are not encoded in the serialized reference. Producer and worker processes share the same `Task` constant and PostgreSQL state; no runtime task registry is required.
+The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference containing the queue, task name, and task ID. Its Rust input/output types are compile-time information and are not encoded in the serialized reference. Producer and worker processes share the same `Task` constant and PostgreSQL state. No runtime task registry is required.
 
 Steda provides **at-least-once execution**. A logical task may run more than once after retries or lease recovery. PostgreSQL fencing prevents stale attempts from committing Steda state, but arbitrary external side effects can still repeat and need their own idempotency or fencing when that matters.
 
