@@ -36,9 +36,13 @@ Steda requires PostgreSQL 18+. See [MSRV](#msrv) for supported Rust versions.
 cargo add steda
 ```
 
-Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it to your PostgreSQL database before starting producers or workers.
+Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it atomically before starting producers or workers:
 
-When upgrading Steda, apply the `steda.sql` file from the new release again before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script; any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
+```sh
+psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f steda.sql
+```
+
+When upgrading Steda, apply the new release's `steda.sql` the same way before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script. Any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
 
 ## Features
 
@@ -114,7 +118,9 @@ let output = task.result().await?;
 println!("{}", output.resized_key);
 ```
 
-The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference that keeps the queue, task name, task ID, and Rust input/output types together across restarts. Producer and worker processes share the same `Task` constant and PostgreSQL state; no runtime task registry is required.
+The returned task keeps the output type attached, so results and snapshots remain typed. `task.task_ref()` produces a serializable reference containing the queue, task name, and task ID. Its Rust input/output types are compile-time information and are not encoded in the serialized reference. Producer and worker processes share the same `Task` constant and PostgreSQL state. No runtime task registry is required.
+
+Steda provides **at-least-once execution**. A logical task may run more than once after retries or lease recovery. PostgreSQL fencing prevents stale attempts from committing Steda state, but arbitrary external side effects can still repeat and need their own idempotency or fencing when that matters.
 
 ## Durable workflows
 
@@ -265,6 +271,9 @@ deployment uses one database role to run migrations, provision queues, and execu
 operations. Deployments that separate migration, provisioning, and runtime roles must grant the
 required schema, function, and queue-table privileges explicitly; Steda does not install a
 least-privilege role split automatically.
+
+Handler errors and string panic messages can be persisted as failure data, so they should not
+contain secrets.
 
 ## Tower middleware
 

@@ -11,8 +11,9 @@
 //! # Installation
 //!
 //! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
-//! database before producers or workers start. Reapply the new release's `steda.sql` when
-//! upgrading.
+//! database before producers or workers start. Apply it atomically. With `psql`, use
+//! `--single-transaction -v ON_ERROR_STOP=1`. Reapply the new release's `steda.sql` the same way
+//! when upgrading.
 //!
 //! Steda has no default crate features. Enable `tls-rustls` or `tls-native-tls` when
 //! [`Steda::connect`] needs TLS support.
@@ -64,6 +65,11 @@
 //!
 //! # Execution model
 //!
+//! Steda provides **at-least-once execution**. A logical task may run more than once after retries
+//! or lease recovery. `PostgreSQL` fencing prevents stale attempts from committing Steda state,
+//! but arbitrary external side effects can still repeat and need their own idempotency or fencing
+//! when that matters.
+//!
 //! ## Logical tasks and attempts
 //!
 //! One spawn creates one **logical task** identified by [`TaskId`]. Each execution try is a
@@ -101,8 +107,9 @@
 //! This is one execution path, not two durability models. The long-lived Steda worker still owns
 //! the claim, lease supervision, cancellation observation, retry policy, and terminal database
 //! transition. A custom executor only decides **where one already-claimed attempt computes**.
-//! Returning an error from a custom executor is therefore an ordinary failed attempt. If the
-//! worker process itself disappears, recovery still follows lease expiry.
+//! Returning an error from a custom executor is therefore an ordinary failed attempt. Handler
+//! error messages and string panic messages may be persisted as failure data, so they should not
+//! contain secrets. If the worker process itself disappears, recovery still follows lease expiry.
 //! Steda may drop the executor future when supervision observes cancellation, suspension, or
 //! lease loss; executors that provision external compute must make that drop terminate or fence
 //! the external work.
@@ -147,8 +154,9 @@
 //! its decoded output under an internal identity derived from the target queue and task ID. A
 //! completed wait can therefore replay if the parent later retries.
 //!
-//! Same-queue waits are rejected because a finite worker pool could otherwise be filled entirely
-//! by parents waiting for children that need those same slots. Cross-queue waits retain the
+//! Same-queue task execution is supported. Same-queue waits are rejected because a finite worker
+//! pool could otherwise be filled entirely by parents waiting for children that need those same
+//! slots. Cross-queue waits retain the
 //! current worker execution slot while polling, so use them for bounded dependencies rather than
 //! as a generic long-term suspension mechanism.
 //!
@@ -157,7 +165,8 @@
 //! Persisted task names, step names, sleep names, and their serialized input, output, and
 //! checkpoint values are part of a workflow's durable compatibility boundary. Keep their
 //! serialization compatible while old work may still exist, or introduce a new stable task, step,
-//! or sleep name for an incompatible version.
+//! or sleep name for an incompatible version. Serialized [`TaskRef`] values contain only the queue
+//! name, task name, and [`TaskId`]. Their Rust generic parameters are not persisted type metadata.
 //!
 //! # Submission guarantees
 //!
@@ -215,10 +224,10 @@
 //! queue. Multiple worker processes can consume the same queue concurrently; `PostgreSQL` remains
 //! the ownership authority.
 //!
-//! [`Worker::run_until`] stops new claims when its shutdown future resolves and drains attempts
-//! already executing. An abrupt process stop is also state-machine safe because finite leases
-//! allow later recovery, but graceful shutdown avoids waiting for lease expiry when current work
-//! can finish normally.
+//! [`Worker::run_until`] stops new claims when its shutdown future resolves and waits for attempts
+//! already executing to finish. There is no built-in drain timeout. An abrupt process stop is also
+//! state-machine safe because finite leases allow later recovery, but graceful shutdown avoids
+//! waiting for lease expiry when current work can finish normally.
 //!
 //! ## Cleanup and retention
 //!
