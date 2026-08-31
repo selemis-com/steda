@@ -3976,7 +3976,7 @@ Apache License 2.0
 - [indexmap]( https://github.com/indexmap-rs/indexmap ) 2.14.0
 - [linux-raw-sys]( https://github.com/sunfishcode/linux-raw-sys ) 0.12.1
 - [lock_api]( https://github.com/Amanieu/parking_lot ) 0.4.14
-- [log]( https://github.com/rust-lang/log ) 0.4.33
+- [log]( https://github.com/rust-lang/log ) 0.4.34
 - [num-traits]( https://github.com/rust-num/num-traits ) 0.2.19
 - [once_cell]( https://github.com/matklad/once_cell ) 1.21.4
 - [openssl-probe]( https://github.com/rustls/openssl-probe ) 0.2.1
@@ -4002,7 +4002,7 @@ Apache License 2.0
 - [unicode-normalization]( https://github.com/unicode-rs/unicode-normalization ) 0.1.25
 - [unicode-properties]( https://github.com/unicode-rs/unicode-properties ) 0.1.4
 - [url]( https://github.com/servo/rust-url ) 2.5.8
-- [uuid]( https://github.com/uuid-rs/uuid ) 1.24.1
+- [uuid]( https://github.com/uuid-rs/uuid ) 1.25.0
 - [version_check]( https://github.com/SergioBenitez/version_check ) 0.9.5
 - [wait-timeout]( https://github.com/alexcrichton/wait-timeout ) 0.2.1
 - [wasi]( https://github.com/bytecodealliance/wasi ) 0.11.1+wasi-snapshot-preview1
