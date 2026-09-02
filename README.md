@@ -15,6 +15,20 @@
   <a href="#license"><picture><source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/crates/l/steda?colorA=21262d&colorB=21262d&style=flat"><img src="https://img.shields.io/crates/l/steda?colorA=f6f8fa&colorB=f6f8fa&style=flat" alt="MIT OR Apache-2.0"></picture></a>
 </p>
 
+<p align="center">
+  <a href="#installation">Installation</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#durable-workflows">Durable workflows</a> ·
+  <a href="#runnable-examples">Examples</a> ·
+  <a href="#operations">Operations</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
+
+<br/>
+
+## Overview
+
 Steda is a durable task queue for Rust applications that already depend on PostgreSQL. Tasks are
 ordinary async Rust handlers; PostgreSQL stores queues, attempts, retries, checkpoints, durable
 sleeps, cancellation state, and results so work can survive process restarts and worker failure.
