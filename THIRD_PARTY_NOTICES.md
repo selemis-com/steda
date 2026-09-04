@@ -4002,7 +4002,7 @@ Apache License 2.0
 - [unicode-normalization]( https://github.com/unicode-rs/unicode-normalization ) 0.1.25
 - [unicode-properties]( https://github.com/unicode-rs/unicode-properties ) 0.1.4
 - [url]( https://github.com/servo/rust-url ) 2.5.8
-- [uuid]( https://github.com/uuid-rs/uuid ) 1.25.0
+- [uuid]( https://github.com/uuid-rs/uuid ) 1.26.0
 - [version_check]( https://github.com/SergioBenitez/version_check ) 0.9.5
 - [wait-timeout]( https://github.com/alexcrichton/wait-timeout ) 0.2.1
 - [wasi]( https://github.com/bytecodealliance/wasi ) 0.11.1+wasi-snapshot-preview1
