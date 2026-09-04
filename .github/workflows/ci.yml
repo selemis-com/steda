@@ -78,7 +78,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-hack
 
@@ -127,7 +127,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-nextest
 
@@ -176,7 +176,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-nextest
 
@@ -320,7 +320,7 @@ jobs:
           persist-credentials: false
 
       - name: Check spelling
-        uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
+        uses: crate-ci/typos@4d9c206a77c041268485162b8e2579ad7a5cb9a3 # v1.50.0
 
   correctness-sql:
     runs-on: ubuntu-latest
@@ -356,7 +356,7 @@ jobs:
           persist-credentials: false
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-deny
 
@@ -382,7 +382,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-about
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-about
 
