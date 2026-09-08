@@ -38,6 +38,10 @@ mod tests {
 
     const CHECKPOINT_ONLY: Task<Value, Value> = Task::new("checkpoint-only");
 
+    const KEYED_CHECKPOINTS: Task<Value, Value> = Task::new("keyed-checkpoints");
+
+    const KEYED_VALUE: Step<Value> = Step::new("item");
+
     const MIXED_WORKFLOW_IDENTITY: Task<Value, Value> = Task::new("mixed-workflow-identity");
 
     async fn fetch_checkpoints(
@@ -154,6 +158,79 @@ mod tests {
         assert_eq!(
             fetch_checkpoints(&pool, &queue, spawned.task_id()).await?,
             vec![("$step:shared".to_owned(), result["checkpoint"].clone())]
+        );
+
+        app.delete().await?;
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./sql/migrations")]
+    async fn keyed_steps_replay_each_runtime_instance_independently(pool: PgPool) -> Result<()> {
+        let queue = unique_queue("checkpoint_keyed");
+        let app = Steda::from_pool(pool.clone()).queue(queue.clone())?;
+        app.create().await?;
+
+        let executions = Arc::new(AtomicUsize::new(0));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let worker = app
+            .worker()
+            .task(KEYED_CHECKPOINTS, {
+                let executions = Arc::clone(&executions);
+                let attempts = Arc::clone(&attempts);
+                move |_params: Value, ctx: TaskContext| {
+                    let executions = Arc::clone(&executions);
+                    let attempts = Arc::clone(&attempts);
+                    async move {
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        let first = ctx
+                            .step_keyed(KEYED_VALUE.keyed("turn-1"), {
+                                let executions = Arc::clone(&executions);
+                                async move || {
+                                    executions.fetch_add(1, Ordering::SeqCst);
+                                    Ok::<_, Error>(json!({"turn": 1}))
+                                }
+                            })
+                            .await?;
+                        let second = ctx
+                            .step_keyed(KEYED_VALUE.keyed("turn-2"), {
+                                let executions = Arc::clone(&executions);
+                                async move || {
+                                    executions.fetch_add(1, Ordering::SeqCst);
+                                    Ok::<_, Error>(json!({"turn": 2}))
+                                }
+                            })
+                            .await?;
+
+                        if attempt == 1 {
+                            return Err(Error::Other("retry after keyed checkpoints".to_owned()));
+                        }
+
+                        Ok(json!({"first": first, "second": second}))
+                    }
+                }
+            })
+            .build()?;
+
+        let spawned = app
+            .spawn(KEYED_CHECKPOINTS, json!({}))
+            .max_attempts(2)
+            .retry_strategy(RetryStrategy::fixed(Duration::ZERO))
+            .await?;
+
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+        assert_eq!(executions.load(Ordering::SeqCst), 2);
+        run_worker_for_claims(&worker, app.metrics(), 1).await?;
+        assert_eq!(executions.load(Ordering::SeqCst), 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(spawned.result().await?, json!({"first": {"turn": 1}, "second": {"turn": 2}}));
+
+        let checkpoints = fetch_checkpoints(&pool, &queue, spawned.task_id()).await?;
+        assert_eq!(
+            checkpoints,
+            vec![
+                ("$step-keyed:4:itemturn-1".to_owned(), json!({"turn": 1})),
+                ("$step-keyed:4:itemturn-2".to_owned(), json!({"turn": 2})),
+            ]
         );
 
         app.delete().await?;

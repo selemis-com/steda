@@ -18,13 +18,15 @@ use crate::{
     error::{Error, Result, map_sqlx_error},
     task::{TaskRef, decode_result},
     types::{ClaimedTask, Json, JsonObject, RunId, TaskId},
-    workflow::{Sleep, Step},
+    workflow::{KeyedStep, Sleep, Step},
 };
 
 /// Maximum persisted durable workflow identity length in UTF-8 bytes.
 const MAX_WORKFLOW_STORAGE_NAME_BYTES: usize = 1024;
 /// Internal namespace for typed result-bearing steps.
 const STEP_PREFIX: &str = "$step:";
+/// Internal namespace for runtime-keyed typed result-bearing steps.
+const KEYED_STEP_PREFIX: &str = "$step-keyed:";
 /// Internal namespace for durable sleeps.
 const SLEEP_PREFIX: &str = "$sleep:";
 /// Internal namespace for cross-task result waits.
@@ -189,6 +191,30 @@ impl TaskContext {
         Fut: Future<Output = Result<Output>> + Send,
     {
         let name = workflow_storage_name(STEP_PREFIX, step.name())?;
+        self.checkpoint(&name, f).await
+    }
+
+    /// Execute one runtime-keyed instance of a durable typed step.
+    ///
+    /// [`KeyedStep`] is useful when a workflow repeats the same statically defined operation for
+    /// runtime-identified items. The pair `(step, key)` is the durable identity: the same pair
+    /// replays its committed value, while distinct keys may execute and checkpoint concurrently.
+    ///
+    /// As with [`Self::step`], checkpointing prevents repeated Steda execution after retry but
+    /// cannot make external side effects exactly-once. Runtime keys should therefore be stable,
+    /// deterministic identifiers rather than attempt-local counters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the static step name or runtime key is invalid, the step function
+    /// fails, or the checkpoint cannot be persisted or deserialized.
+    pub async fn step_keyed<Output, F, Fut>(&self, step: KeyedStep<Output>, f: F) -> Result<Output>
+    where
+        Output: Serialize + DeserializeOwned + Send + 'static,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Output>> + Send,
+    {
+        let name = keyed_workflow_storage_name(KEYED_STEP_PREFIX, step.step().name(), step.key())?;
         self.checkpoint(&name, f).await
     }
 
@@ -442,6 +468,31 @@ fn workflow_storage_name(prefix: &str, name: &str) -> Result<String> {
     Ok(format!("{prefix}{name}"))
 }
 
+/// Build an unambiguous namespaced persisted key for one runtime-keyed workflow identity.
+fn keyed_workflow_storage_name(prefix: &str, name: &str, key: &str) -> Result<String> {
+    if name.trim().is_empty() {
+        return Err(Error::InvalidOptions("workflow identity must not be empty".to_owned()));
+    }
+    if key.trim().is_empty() {
+        return Err(Error::InvalidOptions("workflow instance key must not be empty".to_owned()));
+    }
+
+    // Length-prefix the static name so arbitrary UTF-8 keys cannot alias another `(name, key)`
+    // pair through separator placement. `name.len()` is a UTF-8 byte count, matching the
+    // PostgreSQL checkpoint-name byte ceiling enforced below.
+    let identity = format!("{}:{name}{key}", name.len());
+    let maximum_identity_bytes = MAX_WORKFLOW_STORAGE_NAME_BYTES
+        .checked_sub(prefix.len())
+        .expect("workflow namespace prefix must fit the PostgreSQL checkpoint name limit");
+    if identity.len() > maximum_identity_bytes {
+        return Err(Error::InvalidOptions(format!(
+            "keyed workflow identity must be at most {maximum_identity_bytes} bytes"
+        )));
+    }
+
+    Ok(format!("{prefix}{identity}"))
+}
+
 /// Awaitable typed cross-task result wait.
 ///
 /// Created by [`TaskContext::await_task`]. Awaiting polls the target task until it reaches a
@@ -493,7 +544,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SLEEP_PREFIX, STEP_PREFIX, workflow_storage_name};
+    use super::{
+        KEYED_STEP_PREFIX, SLEEP_PREFIX, STEP_PREFIX, keyed_workflow_storage_name,
+        workflow_storage_name,
+    };
 
     #[test]
     fn workflow_identity_limit_includes_internal_namespace() {
@@ -514,5 +568,26 @@ mod tests {
             1024
         );
         assert!(workflow_storage_name(SLEEP_PREFIX, &(maximum_sleep_name + "x")).is_err());
+    }
+
+    #[test]
+    fn keyed_workflow_identity_is_unambiguous_and_bounded() {
+        let first = keyed_workflow_storage_name(KEYED_STEP_PREFIX, "ab", "c")
+            .expect("valid keyed step should encode");
+        let second = keyed_workflow_storage_name(KEYED_STEP_PREFIX, "a", "bc")
+            .expect("valid keyed step should encode");
+        assert_ne!(first, second);
+        assert_eq!(first, "$step-keyed:2:abc");
+        assert!(keyed_workflow_storage_name(KEYED_STEP_PREFIX, "step", "").is_err());
+
+        let fixed = KEYED_STEP_PREFIX.len() + "1:a".len();
+        let maximum_key = "x".repeat(1024 - fixed);
+        assert_eq!(
+            keyed_workflow_storage_name(KEYED_STEP_PREFIX, "a", &maximum_key)
+                .expect("maximum keyed identity should fit")
+                .len(),
+            1024
+        );
+        assert!(keyed_workflow_storage_name(KEYED_STEP_PREFIX, "a", &(maximum_key + "x")).is_err());
     }
 }
