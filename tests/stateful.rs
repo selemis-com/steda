@@ -18,7 +18,11 @@ mod common;
 mod tests {
     use std::{cell::RefCell, env, error::Error as StdError, fmt, io};
 
-    use proptest::{prelude::*, strategy::Union, test_runner::Config};
+    use proptest::{
+        prelude::*,
+        strategy::Union,
+        test_runner::Config,
+    };
     use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -45,12 +49,15 @@ mod tests {
         Spawn,
         Replay,
         Claim,
+        ProbeEmptyClaim,
         Supervise,
         Fail,
         Complete,
         Cancel,
         Retry,
         Checkpoint,
+        ProbeCheckpoint,
+        ReplayCheckpoint,
         Sleep,
         AdvanceTime,
         ReapExpired,
@@ -63,16 +70,19 @@ mod tests {
                 Self::Spawn => 0,
                 Self::Replay => 1,
                 Self::Claim => 2,
-                Self::Supervise => 3,
-                Self::Fail => 4,
-                Self::Complete => 5,
-                Self::Cancel => 6,
-                Self::Retry => 7,
-                Self::Checkpoint => 8,
-                Self::Sleep => 9,
-                Self::AdvanceTime => 10,
-                Self::ReapExpired => 11,
-                Self::CancelExpired => 12,
+                Self::ProbeEmptyClaim => 3,
+                Self::Supervise => 4,
+                Self::Fail => 5,
+                Self::Complete => 6,
+                Self::Cancel => 7,
+                Self::Retry => 8,
+                Self::Checkpoint => 9,
+                Self::ProbeCheckpoint => 10,
+                Self::ReplayCheckpoint => 11,
+                Self::Sleep => 12,
+                Self::AdvanceTime => 13,
+                Self::ReapExpired => 14,
+                Self::CancelExpired => 15,
             }
         }
     }
@@ -107,6 +117,14 @@ mod tests {
                         .debug_struct("Claim")
                         .field("worker", &worker_name(worker))
                         .field("tasks", &capability_description(capability))
+                        .field("lease", &lease_description(lease))
+                        .finish()
+                }
+                OperationKind::ProbeEmptyClaim => {
+                    let [worker, lease, _, _, _, _] = self.args;
+                    formatter
+                        .debug_struct("ProbeEmptyClaim")
+                        .field("worker", &worker_name(worker))
                         .field("lease", &lease_description(lease))
                         .finish()
                 }
@@ -149,6 +167,22 @@ mod tests {
                         .field("run_selector", &run)
                         .field("step", &checkpoint_name(step))
                         .field("value", &value)
+                        .finish()
+                }
+                OperationKind::ProbeCheckpoint => {
+                    let [run, step, value, _, _, _] = self.args;
+                    formatter
+                        .debug_struct("ProbeCheckpoint")
+                        .field("run_selector", &run)
+                        .field("step", &checkpoint_name(step))
+                        .field("value", &value)
+                        .finish()
+                }
+                OperationKind::ReplayCheckpoint => {
+                    let [checkpoint, _, _, _, _, _] = self.args;
+                    formatter
+                        .debug_struct("ReplayCheckpoint")
+                        .field("checkpoint_selector", &checkpoint)
                         .finish()
                 }
                 OperationKind::Sleep => {
@@ -228,11 +262,20 @@ mod tests {
         options: Value,
     }
 
+    #[derive(Debug, Clone)]
+    struct CheckpointBinding {
+        task_id: Uuid,
+        run_id: Uuid,
+        name: String,
+        state: Value,
+    }
+
     #[derive(Debug, Default)]
     struct Bindings {
         tasks: Vec<Uuid>,
         runs: Vec<Uuid>,
         spawns: Vec<SpawnRequest>,
+        checkpoints: Vec<CheckpointBinding>,
     }
 
     #[derive(Debug)]
@@ -294,9 +337,9 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Coverage {
-        attempted: [usize; 13],
-        affected: [usize; 13],
-        rejected: [usize; 13],
+        attempted: [usize; 16],
+        affected: [usize; 16],
+        rejected: [usize; 16],
         completion_cancellations: usize,
         failure_outcomes: [usize; 4],
     }
@@ -355,12 +398,21 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct Model {
         spawned_tasks: usize,
+        known_runnable: usize,
+        known_running: usize,
+        replayable_checkpoints: usize,
         elapsed_seconds: u64,
     }
 
     impl Default for Model {
         fn default() -> Self {
-            Self { spawned_tasks: 1, elapsed_seconds: 0 }
+            Self {
+                spawned_tasks: 1,
+                known_runnable: 1,
+                known_running: 0,
+                replayable_checkpoints: 0,
+                elapsed_seconds: 0,
+            }
         }
     }
 
@@ -396,12 +448,12 @@ mod tests {
                         .boxed(),
                 ),
                 (
-                    7,
-                    (any::<bool>(), 0_u8..=2, 1_u8..=5)
-                        .prop_map(|(worker, capability, lease)| {
+                    1,
+                    (any::<bool>(), 1_u8..=5)
+                        .prop_map(|(worker, lease)| {
                             Operation::new(
-                                OperationKind::Claim,
-                                [u8::from(worker), capability, lease, 0, 0, 0],
+                                OperationKind::ProbeEmptyClaim,
+                                [u8::from(worker), lease, 0, 0, 0, 0],
                             )
                         })
                         .boxed(),
@@ -432,6 +484,24 @@ mod tests {
                 ),
             ];
 
+            // Only spend normal claim transitions when the model has positive evidence of
+            // runnable work. Claims use the broad capability set so that evidence maps to a
+            // concrete eligible task regardless of its generated name. Empty-queue behavior
+            // has its own explicit probe above.
+            if state.known_runnable > 0 {
+                transitions.push((
+                    12,
+                    (any::<bool>(), 1_u8..=5)
+                        .prop_map(|(worker, lease)| {
+                            Operation::new(
+                                OperationKind::Claim,
+                                [u8::from(worker), 0, lease, 0, 0, 0],
+                            )
+                        })
+                        .boxed(),
+                ));
+            }
+
             if state.spawned_tasks > 0 {
                 transitions.extend([
                     (
@@ -459,6 +529,31 @@ mod tests {
                             .boxed(),
                     ),
                 ]);
+            }
+
+            if state.known_running > 0 {
+                transitions.push((
+                    4,
+                    (any::<u8>(), any::<u8>(), any::<u8>())
+                        .prop_map(|(run, step, value)| {
+                            Operation::new(OperationKind::Checkpoint, [run, step, value, 0, 0, 0])
+                        })
+                        .boxed(),
+                ));
+            }
+
+            if state.replayable_checkpoints > 0 {
+                transitions.push((
+                    4,
+                    any::<u8>()
+                        .prop_map(|checkpoint| {
+                            Operation::new(
+                                OperationKind::ReplayCheckpoint,
+                                [checkpoint, 0, 0, 0, 0, 0],
+                            )
+                        })
+                        .boxed(),
+                ));
             }
 
             // The initial task always has a run. Historical run selectors are retained on
@@ -490,10 +585,13 @@ mod tests {
                         .boxed(),
                 ),
                 (
-                    3,
+                    1,
                     (any::<u8>(), any::<u8>(), any::<u8>())
                         .prop_map(|(run, step, value)| {
-                            Operation::new(OperationKind::Checkpoint, [run, step, value, 0, 0, 0])
+                            Operation::new(
+                                OperationKind::ProbeCheckpoint,
+                                [run, step, value, 0, 0, 0],
+                            )
                         })
                         .boxed(),
                 ),
@@ -512,21 +610,49 @@ mod tests {
 
         fn apply(mut state: Self::State, transition: &Self::Transition) -> Self::State {
             match transition.kind {
-                OperationKind::Spawn => state.spawned_tasks += 1,
+                OperationKind::Spawn => {
+                    state.spawned_tasks += 1;
+                    state.known_runnable += 1;
+                }
+                OperationKind::Claim => {
+                    state.known_runnable = state.known_runnable.saturating_sub(1);
+                    state.known_running += 1;
+                }
+                OperationKind::Checkpoint => {
+                    state.replayable_checkpoints += 1;
+                }
+                OperationKind::Cancel => {
+                    // Cancellation may target either runnable or running work. Drop all
+                    // positive run/checkpoint evidence rather than generating later
+                    // productive operations from stale optimism.
+                    state.known_runnable = state.known_runnable.saturating_sub(1);
+                    state.known_running = 0;
+                    state.replayable_checkpoints = 0;
+                }
                 OperationKind::AdvanceTime => {
                     state.elapsed_seconds += u64::from(transition.args[0]);
+                    if transition.args[0] > 0 {
+                        state.known_running = 0;
+                        state.replayable_checkpoints = 0;
+                    }
                 }
-                OperationKind::Replay
-                | OperationKind::Claim
-                | OperationKind::Supervise
+                OperationKind::Supervise
                 | OperationKind::Fail
                 | OperationKind::Complete
-                | OperationKind::Cancel
                 | OperationKind::Retry
-                | OperationKind::Checkpoint
                 | OperationKind::Sleep
                 | OperationKind::ReapExpired
-                | OperationKind::CancelExpired => {}
+                | OperationKind::CancelExpired => {
+                    // These operations can replace, finish, suspend, expire, or otherwise
+                    // invalidate an active run. Be conservative: a later productive
+                    // checkpoint must be preceded by a newly known-good claim.
+                    state.known_running = 0;
+                    state.replayable_checkpoints = 0;
+                }
+                OperationKind::Replay
+                | OperationKind::ProbeEmptyClaim
+                | OperationKind::ProbeCheckpoint
+                | OperationKind::ReplayCheckpoint => {}
             }
             state
         }
@@ -1277,6 +1403,28 @@ mod tests {
                     1,
                 ))
             }
+            OperationKind::ProbeEmptyClaim => {
+                let [worker, lease_seconds, _, _, _, _] = operation.args;
+                let worker_id = worker_name(worker);
+                let task_names = ["__steda_stateful_no_such_task__"];
+                let row = sqlx::query(
+                    "SELECT run_id FROM steda.claim_tasks($1, $2, $3, 1, $4)",
+                )
+                .bind(queue)
+                .bind(worker_id)
+                .bind(i32::from(lease_seconds))
+                .bind(task_names.as_slice())
+                .fetch_optional(&mut *connection)
+                .await?;
+                ensure(row.is_none(), "empty-claim probe unexpectedly claimed a run")?;
+                Ok(outcome(
+                    format!(
+                        "PROBE EMPTY CLAIM {worker_id} lease={} -> no eligible task",
+                        lease_description(lease_seconds),
+                    ),
+                    1,
+                ))
+            }
             OperationKind::Supervise => {
                 let [run, extension, _, _, _, _] = operation.args;
                 let Some(run_id) = select_run(bindings, run) else {
@@ -1833,12 +1981,63 @@ mod tests {
                     1,
                 ))
             }
-            OperationKind::Checkpoint => {
+            OperationKind::Checkpoint | OperationKind::ProbeCheckpoint => {
                 let [run, step, value, _, _, _] = operation.args;
-                let Some(run_id) = select_run(bindings, run) else {
+                let now = current_time(connection).await?;
+                let productive = matches!(operation.kind, OperationKind::Checkpoint);
+                let selected = if productive {
+                    if bindings.runs.is_empty() {
+                        None
+                    } else {
+                        let start = usize::from(run) % bindings.runs.len();
+                        let mut selected = None;
+                        for offset in 0..bindings.runs.len() {
+                            let candidate = bindings.runs[(start + offset) % bindings.runs.len()];
+                            let Some(status) = fetch_run(connection, queue, candidate).await? else {
+                                continue;
+                            };
+                            let Some(task) =
+                                fetch_task(connection, queue, status.task_id).await?
+                            else {
+                                continue;
+                            };
+                            if expected_run_rejection(&status, now).is_none()
+                                && !max_duration_due(&task, now)
+                            {
+                                selected = Some(candidate);
+                                break;
+                            }
+                        }
+                        selected
+                    }
+                } else if bindings.runs.is_empty() {
+                    None
+                } else {
+                    let start = usize::from(run) % bindings.runs.len();
+                    let mut selected = None;
+                    for offset in 0..bindings.runs.len() {
+                        let candidate = bindings.runs[(start + offset) % bindings.runs.len()];
+                        let Some(status) = fetch_run(connection, queue, candidate).await? else {
+                            continue;
+                        };
+                        let Some(task) = fetch_task(connection, queue, status.task_id).await? else {
+                            continue;
+                        };
+                        if expected_run_rejection(&status, now).is_some()
+                            || max_duration_due(&task, now)
+                        {
+                            selected = Some(candidate);
+                            break;
+                        }
+                    }
+                    selected
+                };
+                let Some(run_id) = selected else {
                     return Ok(outcome(
                         format!(
-                            "CHECKPOINT selector={run} {}={value} -> skipped: no runs exist",
+                            "{} selector={run} {}={value} -> skipped: no {} run exists",
+                            if productive { "CHECKPOINT" } else { "PROBE CHECKPOINT" },
+                            if productive { "applicable" } else { "inapplicable" },
                             checkpoint_name(step),
                         ),
                         0,
@@ -1857,10 +2056,17 @@ mod tests {
                 let task = fetch_task(connection, queue, status.task_id)
                     .await?
                     .ok_or_else(|| stateful_error("checkpoint run lost its task"))?;
-                let now = current_time(connection).await?;
                 let step_name = checkpoint_name(step);
                 let expected_rejection = expected_run_rejection(&status, now)
                     .or_else(|| max_duration_due(&task, now).then_some(Some("ST001")));
+                if !productive && expected_rejection.is_none() {
+                    return Ok(outcome(
+                        format!(
+                            "PROBE CHECKPOINT {run_label} {step_name}={value} -> skipped: selected run is applicable",
+                        ),
+                        0,
+                    ));
+                }
                 if let Some(expected_sqlstate) = expected_rejection {
                     let result = sqlx::query(
                         "SELECT checkpoint_state, written FROM steda.set_task_checkpoint_state($1, $2, $3, $4, $5)",
@@ -1878,7 +2084,8 @@ mod tests {
                         "inapplicable checkpoint succeeded",
                     )?;
                     return Ok(rejected_outcome(format!(
-                        "CHECKPOINT {run_label} {step_name}={value} -> rejected by PostgreSQL",
+                        "{} {run_label} {step_name}={value} -> rejected by PostgreSQL",
+                        if productive { "CHECKPOINT" } else { "PROBE CHECKPOINT" },
                     )));
                 }
 
@@ -1920,6 +2127,14 @@ mod tests {
                         .any(|(name, state)| name == step_name && state == &expected_state),
                     "committed checkpoint is not visible to its owning attempt",
                 )?;
+                if written {
+                    bindings.checkpoints.push(CheckpointBinding {
+                        task_id: status.task_id,
+                        run_id,
+                        name: step_name.to_owned(),
+                        state: expected_state.clone(),
+                    });
+                }
                 let affected = usize::from(written);
                 Ok(outcome(
                     format!(
@@ -1927,6 +2142,83 @@ mod tests {
                         if written { "written" } else { "replayed" },
                     ),
                     affected,
+                ))
+            }
+            OperationKind::ReplayCheckpoint => {
+                let [checkpoint, _, _, _, _, _] = operation.args;
+                if bindings.checkpoints.is_empty() {
+                    return Ok(outcome(
+                        format!(
+                            "REPLAY CHECKPOINT selector={checkpoint} -> skipped: no committed checkpoints exist"
+                        ),
+                        0,
+                    ));
+                }
+
+                let start = usize::from(checkpoint) % bindings.checkpoints.len();
+                let now = current_time(connection).await?;
+                let mut selected = None;
+                for offset in 0..bindings.checkpoints.len() {
+                    let candidate = bindings.checkpoints
+                        [(start + offset) % bindings.checkpoints.len()]
+                        .clone();
+                    let Some(run) = fetch_run(connection, queue, candidate.run_id).await? else {
+                        continue;
+                    };
+                    let Some(task) = fetch_task(connection, queue, candidate.task_id).await? else {
+                        continue;
+                    };
+                    if expected_run_rejection(&run, now).is_none()
+                        && !max_duration_due(&task, now)
+                    {
+                        selected = Some(candidate);
+                        break;
+                    }
+                }
+
+                let Some(checkpoint) = selected else {
+                    return Ok(outcome(
+                        "REPLAY CHECKPOINT -> skipped: no checkpoint has an applicable owning run"
+                            .to_owned(),
+                        0,
+                    ));
+                };
+                let label = run_label(bindings, checkpoint.run_id);
+                let row = sqlx::query(
+                    "SELECT checkpoint_state, written FROM steda.set_task_checkpoint_state($1, $2, $3, $4, $5)",
+                )
+                .bind(queue)
+                .bind(checkpoint.task_id)
+                .bind(&checkpoint.name)
+                .bind(checkpoint.state.clone())
+                .bind(checkpoint.run_id)
+                .fetch_one(&mut *connection)
+                .await?;
+                let replayed_state: Value = row.get("checkpoint_state");
+                let written: bool = row.get("written");
+                ensure(!written, "checkpoint replay unexpectedly reported a new write")?;
+                ensure(
+                    replayed_state == checkpoint.state,
+                    "checkpoint replay returned a different committed value",
+                )?;
+                let stored = fetch_checkpoint_state(
+                    connection,
+                    queue,
+                    checkpoint.task_id,
+                    &checkpoint.name,
+                )
+                .await?
+                .ok_or_else(|| stateful_error("checkpoint disappeared during replay"))?;
+                ensure(
+                    stored == checkpoint.state,
+                    "checkpoint replay mutated the committed value",
+                )?;
+                Ok(outcome(
+                    format!(
+                        "REPLAY CHECKPOINT {label} {} -> existing value preserved",
+                        checkpoint.name,
+                    ),
+                    1,
                 ))
             }
             OperationKind::Sleep => {
@@ -2180,19 +2472,28 @@ mod tests {
 
     fn stateful_pool() -> PgPool {
         STATEFUL_POOL.with(|slot| {
-            slot.borrow().as_ref().expect("stateful test pool must be installed").clone()
+            slot.borrow()
+                .as_ref()
+                .expect("stateful test pool must be installed")
+                .clone()
         })
     }
 
     fn stateful_runtime() -> tokio::runtime::Handle {
         STATEFUL_RUNTIME.with(|slot| {
-            slot.borrow().as_ref().expect("stateful runtime must be installed").clone()
+            slot.borrow()
+                .as_ref()
+                .expect("stateful runtime must be installed")
+                .clone()
         })
     }
 
     fn stateful_coverage() -> Coverage {
         STATEFUL_COVERAGE.with(|slot| {
-            slot.borrow().as_ref().expect("stateful coverage must be installed").clone()
+            slot.borrow()
+                .as_ref()
+                .expect("stateful coverage must be installed")
+                .clone()
         })
     }
 
@@ -2208,8 +2509,11 @@ mod tests {
             let mut bindings = Bindings::default();
 
             let connection = runtime.block_on(async {
-                let mut connection = pool.acquire().await.expect("acquire stateful connection");
-                set_initial_time(&mut connection).await.expect("install stateful fake clock");
+                let mut connection =
+                    pool.acquire().await.expect("acquire stateful connection");
+                set_initial_time(&mut connection)
+                    .await
+                    .expect("install stateful fake clock");
                 sqlx::query("SELECT steda.create_queue($1)")
                     .bind(&queue)
                     .execute(&mut *connection)
@@ -2223,7 +2527,10 @@ mod tests {
                 let initial = spawn(&mut connection, &queue, "alpha", 0, initial_options.clone())
                     .await
                     .expect("spawn initial stateful task");
-                assert!(initial.created, "initial stateful task was unexpectedly replayed");
+                assert!(
+                    initial.created,
+                    "initial stateful task was unexpectedly replayed"
+                );
                 bindings.tasks.push(initial.task_id);
                 bindings.spawns.push(SpawnRequest {
                     task_id: initial.task_id,
@@ -2268,10 +2575,11 @@ mod tests {
             let bindings = &mut state.bindings;
             let connection = &mut state.connection;
             let outcome = runtime.block_on(async {
-                let outcome =
-                    apply_operation(connection, queue, bindings, transition).await.map_err(
-                        |error| stateful_error(format!("step {step} {transition:?}: {error}")),
-                    )?;
+                let outcome = apply_operation(connection, queue, bindings, transition)
+                    .await
+                    .map_err(|error| {
+                        stateful_error(format!("step {step} {transition:?}: {error}"))
+                    })?;
                 refresh_bindings(connection, queue, bindings).await.map_err(|error| {
                     stateful_error(format!(
                         "step {step} after {}: refresh failed: {error}",
@@ -2282,16 +2590,18 @@ mod tests {
                     stateful_error(format!("step {step} after {}: {error}", outcome.message))
                 })?;
                 let now = current_time(connection).await?;
-                let initial =
-                    OffsetDateTime::from_unix_timestamp(1_893_456_000).map_err(|error| {
+                let initial = OffsetDateTime::from_unix_timestamp(1_893_456_000)
+                    .map_err(|error| {
                         stateful_error(format!("construct initial fake clock: {error}"))
                     })?;
                 let elapsed_seconds = u64::try_from((now - initial).whole_seconds())
                     .map_err(|_| stateful_error("fake clock moved backwards"))?;
                 Ok::<_, BoxError>((outcome, elapsed_seconds))
             });
-            let (outcome, elapsed_seconds) = outcome
-                .unwrap_or_else(|error| panic!("PostgreSQL stateful transition failed: {error}"));
+            let (outcome, elapsed_seconds) =
+                outcome.unwrap_or_else(|error| {
+                    panic!("PostgreSQL stateful transition failed: {error}")
+                });
             state.observed_elapsed_seconds = elapsed_seconds;
             state.coverage.record(transition.kind, &outcome);
             if state.trace {
@@ -2312,7 +2622,8 @@ mod tests {
                 "reference model and PostgreSQL disagree on task cardinality",
             );
             assert_eq!(
-                state.observed_elapsed_seconds, reference.elapsed_seconds,
+                state.observed_elapsed_seconds,
+                reference.elapsed_seconds,
                 "reference model and PostgreSQL disagree on logical time",
             );
         }
@@ -2343,18 +2654,21 @@ mod tests {
                 coverage.steps(),
             );
             eprintln!(
-                "[stateful] workload: generated_spawns={} | idempotent_replays={} | runs_claimed={} ({} empty claims) | supervised_run_changes={}",
+                "[stateful] workload: generated_spawns={} | idempotent_replays={} | runs_claimed={} ({} natural empty claims) | empty_claim_probes={} | supervised_run_changes={}",
                 coverage.affected(OperationKind::Spawn),
                 coverage.affected(OperationKind::Replay),
                 coverage.affected(OperationKind::Claim),
                 coverage.not_applied(OperationKind::Claim),
+                coverage.affected(OperationKind::ProbeEmptyClaim),
                 coverage.affected(OperationKind::Supervise),
             );
             eprintln!(
-                "[stateful] durable control: manual_retries={} | checkpoint_writes={} ({} replay/skipped) | sleeps_suspended_or_cancelled={} ({} ready/skipped)",
+                "[stateful] durable control: manual_retries={} | checkpoint_writes={} ({} incidental replay/skipped) | explicit_checkpoint_replays={} ({} unavailable/skipped) | sleeps_suspended_or_cancelled={} ({} ready/skipped)",
                 coverage.affected(OperationKind::Retry),
                 coverage.affected(OperationKind::Checkpoint),
                 coverage.not_applied(OperationKind::Checkpoint),
+                coverage.affected(OperationKind::ReplayCheckpoint),
+                coverage.not_applied(OperationKind::ReplayCheckpoint),
                 coverage.affected(OperationKind::Sleep),
                 coverage.not_applied(OperationKind::Sleep),
             );
@@ -2388,21 +2702,25 @@ mod tests {
                 coverage.rejected(OperationKind::Fail),
                 coverage.rejected(OperationKind::Complete),
                 coverage.rejected(OperationKind::Retry),
-                coverage.rejected(OperationKind::Checkpoint),
+                coverage.rejected(OperationKind::Checkpoint)
+                    + coverage.rejected(OperationKind::ProbeCheckpoint),
                 coverage.rejected(OperationKind::Sleep),
             );
             eprintln!(
-                "[stateful] no-op/skipped: supervision={} | fail={} | complete={} | cancel_terminal_or_missing={} | retry={} | checkpoint={} | sleep={}",
+                "[stateful] no-op/skipped: supervision={} | fail={} | complete={} | cancel_terminal_or_missing={} | retry={} | checkpoint={} | checkpoint_probe={} | checkpoint_replay={} | sleep={}",
                 coverage.not_applied(OperationKind::Supervise),
                 coverage.not_applied(OperationKind::Fail),
                 coverage.not_applied(OperationKind::Complete),
                 coverage.not_applied(OperationKind::Cancel),
                 coverage.not_applied(OperationKind::Retry),
                 coverage.not_applied(OperationKind::Checkpoint),
+                coverage.not_applied(OperationKind::ProbeCheckpoint),
+                coverage.not_applied(OperationKind::ReplayCheckpoint),
                 coverage.not_applied(OperationKind::Sleep),
             );
         })
         .await
         .expect("run PostgreSQL state-machine campaign");
     }
+
 }
