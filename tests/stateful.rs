@@ -18,11 +18,7 @@ mod common;
 mod tests {
     use std::{cell::RefCell, env, error::Error as StdError, fmt, io};
 
-    use proptest::{
-        prelude::*,
-        strategy::Union,
-        test_runner::Config,
-    };
+    use proptest::{prelude::*, strategy::Union, test_runner::Config};
     use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -296,7 +292,7 @@ mod tests {
         failure_outcome: Option<FailureOutcome>,
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     struct Coverage {
         attempted: [usize; 13],
         affected: [usize; 13],
@@ -317,6 +313,43 @@ mod tests {
             }
         }
 
+        fn merge(&mut self, other: &Self) {
+            for index in 0..self.attempted.len() {
+                self.attempted[index] += other.attempted[index];
+                self.affected[index] += other.affected[index];
+                self.rejected[index] += other.rejected[index];
+            }
+            self.completion_cancellations += other.completion_cancellations;
+            for (total, value) in self.failure_outcomes.iter_mut().zip(&other.failure_outcomes) {
+                *total += *value;
+            }
+        }
+
+        fn attempted(&self, kind: OperationKind) -> usize {
+            self.attempted[kind.index()]
+        }
+
+        fn affected(&self, kind: OperationKind) -> usize {
+            self.affected[kind.index()]
+        }
+
+        fn rejected(&self, kind: OperationKind) -> usize {
+            self.rejected[kind.index()]
+        }
+
+        fn not_applied(&self, kind: OperationKind) -> usize {
+            self.attempted(kind)
+                .saturating_sub(self.affected(kind))
+                .saturating_sub(self.rejected(kind))
+        }
+
+        fn failure_outcome(&self, outcome: FailureOutcome) -> usize {
+            self.failure_outcomes[outcome.index()]
+        }
+
+        fn steps(&self) -> usize {
+            self.attempted.iter().sum()
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,10 +360,7 @@ mod tests {
 
     impl Default for Model {
         fn default() -> Self {
-            Self {
-                spawned_tasks: 1,
-                elapsed_seconds: 0,
-            }
+            Self { spawned_tasks: 1, elapsed_seconds: 0 }
         }
     }
 
@@ -2081,6 +2111,11 @@ mod tests {
 
     impl Drop for PostgresUnderTest {
         fn drop(&mut self) {
+            STATEFUL_COVERAGE.with(|slot| {
+                if let Some(coverage) = slot.borrow_mut().as_mut() {
+                    coverage.merge(&self.coverage);
+                }
+            });
             let queue = self.queue.clone();
             let result = self.runtime.block_on(async {
                 sqlx::query("SELECT steda.drop_queue($1)")
@@ -2100,6 +2135,7 @@ mod tests {
         static STATEFUL_POOL: RefCell<Option<PgPool>> = const { RefCell::new(None) };
         static STATEFUL_RUNTIME: RefCell<Option<tokio::runtime::Handle>> =
             const { RefCell::new(None) };
+        static STATEFUL_COVERAGE: RefCell<Option<Coverage>> = const { RefCell::new(None) };
     }
 
     struct StatefulContextGuard;
@@ -2118,12 +2154,21 @@ mod tests {
                     "stateful runtime already installed"
                 );
             });
+            STATEFUL_COVERAGE.with(|slot| {
+                assert!(
+                    slot.borrow_mut().replace(Coverage::default()).is_none(),
+                    "stateful coverage already installed"
+                );
+            });
             Self
         }
     }
 
     impl Drop for StatefulContextGuard {
         fn drop(&mut self) {
+            STATEFUL_COVERAGE.with(|slot| {
+                let _ = slot.borrow_mut().take();
+            });
             STATEFUL_RUNTIME.with(|slot| {
                 let _ = slot.borrow_mut().take();
             });
@@ -2135,19 +2180,19 @@ mod tests {
 
     fn stateful_pool() -> PgPool {
         STATEFUL_POOL.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .expect("stateful test pool must be installed")
-                .clone()
+            slot.borrow().as_ref().expect("stateful test pool must be installed").clone()
         })
     }
 
     fn stateful_runtime() -> tokio::runtime::Handle {
         STATEFUL_RUNTIME.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .expect("stateful runtime must be installed")
-                .clone()
+            slot.borrow().as_ref().expect("stateful runtime must be installed").clone()
+        })
+    }
+
+    fn stateful_coverage() -> Coverage {
+        STATEFUL_COVERAGE.with(|slot| {
+            slot.borrow().as_ref().expect("stateful coverage must be installed").clone()
         })
     }
 
@@ -2163,11 +2208,8 @@ mod tests {
             let mut bindings = Bindings::default();
 
             let connection = runtime.block_on(async {
-                let mut connection =
-                    pool.acquire().await.expect("acquire stateful connection");
-                set_initial_time(&mut connection)
-                    .await
-                    .expect("install stateful fake clock");
+                let mut connection = pool.acquire().await.expect("acquire stateful connection");
+                set_initial_time(&mut connection).await.expect("install stateful fake clock");
                 sqlx::query("SELECT steda.create_queue($1)")
                     .bind(&queue)
                     .execute(&mut *connection)
@@ -2181,10 +2223,7 @@ mod tests {
                 let initial = spawn(&mut connection, &queue, "alpha", 0, initial_options.clone())
                     .await
                     .expect("spawn initial stateful task");
-                assert!(
-                    initial.created,
-                    "initial stateful task was unexpectedly replayed"
-                );
+                assert!(initial.created, "initial stateful task was unexpectedly replayed");
                 bindings.tasks.push(initial.task_id);
                 bindings.spawns.push(SpawnRequest {
                     task_id: initial.task_id,
@@ -2229,11 +2268,10 @@ mod tests {
             let bindings = &mut state.bindings;
             let connection = &mut state.connection;
             let outcome = runtime.block_on(async {
-                let outcome = apply_operation(connection, queue, bindings, transition)
-                    .await
-                    .map_err(|error| {
-                        stateful_error(format!("step {step} {transition:?}: {error}"))
-                    })?;
+                let outcome =
+                    apply_operation(connection, queue, bindings, transition).await.map_err(
+                        |error| stateful_error(format!("step {step} {transition:?}: {error}")),
+                    )?;
                 refresh_bindings(connection, queue, bindings).await.map_err(|error| {
                     stateful_error(format!(
                         "step {step} after {}: refresh failed: {error}",
@@ -2244,18 +2282,16 @@ mod tests {
                     stateful_error(format!("step {step} after {}: {error}", outcome.message))
                 })?;
                 let now = current_time(connection).await?;
-                let initial = OffsetDateTime::from_unix_timestamp(1_893_456_000)
-                    .map_err(|error| {
+                let initial =
+                    OffsetDateTime::from_unix_timestamp(1_893_456_000).map_err(|error| {
                         stateful_error(format!("construct initial fake clock: {error}"))
                     })?;
                 let elapsed_seconds = u64::try_from((now - initial).whole_seconds())
                     .map_err(|_| stateful_error("fake clock moved backwards"))?;
                 Ok::<_, BoxError>((outcome, elapsed_seconds))
             });
-            let (outcome, elapsed_seconds) =
-                outcome.unwrap_or_else(|error| {
-                    panic!("PostgreSQL stateful transition failed: {error}")
-                });
+            let (outcome, elapsed_seconds) = outcome
+                .unwrap_or_else(|error| panic!("PostgreSQL stateful transition failed: {error}"));
             state.observed_elapsed_seconds = elapsed_seconds;
             state.coverage.record(transition.kind, &outcome);
             if state.trace {
@@ -2276,8 +2312,7 @@ mod tests {
                 "reference model and PostgreSQL disagree on task cardinality",
             );
             assert_eq!(
-                state.observed_elapsed_seconds,
-                reference.elapsed_seconds,
+                state.observed_elapsed_seconds, reference.elapsed_seconds,
                 "reference model and PostgreSQL disagree on logical time",
             );
         }
@@ -2287,8 +2322,10 @@ mod tests {
     async fn generated_histories_preserve_postgres_contracts(pool: PgPool) {
         let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
+            let config = stateful_config();
+            let cases = config.cases;
             let _context_guard = StatefulContextGuard::install(pool, runtime);
-            proptest::proptest!(stateful_config(), |(
+            proptest::proptest!(config, |(
                 (initial_state, transitions, seen_counter) in
                     StedaStateMachine::sequential_strategy(stateful_history_size())
             )| {
@@ -2299,9 +2336,73 @@ mod tests {
                     seen_counter,
                 );
             });
+
+            let coverage = stateful_coverage();
+            eprintln!(
+                "[stateful] PASS: {cases} histories, {} generated transitions; PostgreSQL invariants and operation contracts held after every transition",
+                coverage.steps(),
+            );
+            eprintln!(
+                "[stateful] workload: generated_spawns={} | idempotent_replays={} | runs_claimed={} ({} empty claims) | supervised_run_changes={}",
+                coverage.affected(OperationKind::Spawn),
+                coverage.affected(OperationKind::Replay),
+                coverage.affected(OperationKind::Claim),
+                coverage.not_applied(OperationKind::Claim),
+                coverage.affected(OperationKind::Supervise),
+            );
+            eprintln!(
+                "[stateful] durable control: manual_retries={} | checkpoint_writes={} ({} replay/skipped) | sleeps_suspended_or_cancelled={} ({} ready/skipped)",
+                coverage.affected(OperationKind::Retry),
+                coverage.affected(OperationKind::Checkpoint),
+                coverage.not_applied(OperationKind::Checkpoint),
+                coverage.affected(OperationKind::Sleep),
+                coverage.not_applied(OperationKind::Sleep),
+            );
+            eprintln!(
+                "[stateful] outcomes: tasks_completed={} | completion_policy_cancellations={} | direct_task_cancellations={} | failed_runs={} -> \
+                 retry_ready={}, retry_scheduled={}, task_failed={}, task_cancelled={}",
+                coverage
+                    .affected(OperationKind::Complete)
+                    .saturating_sub(coverage.completion_cancellations),
+                coverage.completion_cancellations,
+                coverage.affected(OperationKind::Cancel),
+                coverage.affected(OperationKind::Fail),
+                coverage.failure_outcome(FailureOutcome::RetryReady),
+                coverage.failure_outcome(FailureOutcome::RetryScheduled),
+                coverage.failure_outcome(FailureOutcome::TerminalFailed),
+                coverage.failure_outcome(FailureOutcome::Cancelled),
+            );
+            eprintln!(
+                "[stateful] maintenance: nonzero_time_advances={}/{} calls | expired_runs_reaped={} across {} sweeps | \
+                 policy_cancellations={} across {} sweeps",
+                coverage.affected(OperationKind::AdvanceTime),
+                coverage.attempted(OperationKind::AdvanceTime),
+                coverage.affected(OperationKind::ReapExpired),
+                coverage.attempted(OperationKind::ReapExpired),
+                coverage.affected(OperationKind::CancelExpired),
+                coverage.attempted(OperationKind::CancelExpired),
+            );
+            eprintln!(
+                "[stateful] rejected mutations exercised against PostgreSQL: supervisions={} | failures={} | completions={} | retries={} | checkpoints={} | sleeps={}",
+                coverage.rejected(OperationKind::Supervise),
+                coverage.rejected(OperationKind::Fail),
+                coverage.rejected(OperationKind::Complete),
+                coverage.rejected(OperationKind::Retry),
+                coverage.rejected(OperationKind::Checkpoint),
+                coverage.rejected(OperationKind::Sleep),
+            );
+            eprintln!(
+                "[stateful] no-op/skipped: supervision={} | fail={} | complete={} | cancel_terminal_or_missing={} | retry={} | checkpoint={} | sleep={}",
+                coverage.not_applied(OperationKind::Supervise),
+                coverage.not_applied(OperationKind::Fail),
+                coverage.not_applied(OperationKind::Complete),
+                coverage.not_applied(OperationKind::Cancel),
+                coverage.not_applied(OperationKind::Retry),
+                coverage.not_applied(OperationKind::Checkpoint),
+                coverage.not_applied(OperationKind::Sleep),
+            );
         })
         .await
         .expect("run PostgreSQL state-machine campaign");
     }
-
 }
