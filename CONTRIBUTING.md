@@ -30,7 +30,8 @@ Feature proposals should explain the problem being solved, the intended behavior
 
 Repository tests use PostgreSQL through `DATABASE_URL`. SQLx creates isolated migrated databases for integration tests, so the configured PostgreSQL user must be allowed to create and drop databases.
 
-Set up a local database with:
+Create the local environment and start PostgreSQL. The checked-in template matches the repository's
+fixed development credentials, so no values need to be customized:
 
 ```sh
 cp .env.template .env

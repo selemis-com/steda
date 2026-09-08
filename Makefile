@@ -72,10 +72,6 @@ test-doc: ## Run doc tests.
 
 .PHONY: test-examples
 test-examples: ## Build and run all runnable examples.
-	@test -n "$${DATABASE_URL:-}" || { \
-		echo "DATABASE_URL must be set to run the PostgreSQL-backed examples." >&2; \
-		exit 1; \
-	}
 	cargo build \
 		--examples \
 		--all-features \

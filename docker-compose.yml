@@ -5,13 +5,13 @@ services:
     restart: "no"
 
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: steda
+      POSTGRES_PASSWORD: steda
+      POSTGRES_DB: steda_test
       PGDATA: /var/lib/postgresql/18/docker
 
     ports:
-      - "127.0.0.1:${POSTGRES_PORT}:5432"
+      - "127.0.0.1:5432:5432"
 
     volumes:
       - steda-data:/var/lib/postgresql

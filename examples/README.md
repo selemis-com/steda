@@ -8,7 +8,7 @@ in order, but each can be run independently.
 Set `DATABASE_URL` to a PostgreSQL database that the current user can use:
 
 ```sh
-export DATABASE_URL=postgres://postgres:postgres@localhost/steda
+export DATABASE_URL=postgres://steda:steda@127.0.0.1:5432/steda_test
 ```
 
 Every example applies the bundled `sql/steda.sql` schema and creates its own `example-*` queue.
