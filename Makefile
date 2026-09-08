@@ -7,13 +7,13 @@ FEATURES ?=
 # Cargo profile for builds.
 PROFILE ?= dev
 
-# Number of generated PostgreSQL histories in one stateful run.
+# Number of generated PostgreSQL state-machine cases in one stateful run.
 STATEFUL_CASES ?= 64
 
-# Minimum number of operations generated per PostgreSQL history.
+# Minimum number of transitions generated per PostgreSQL state-machine case.
 STATEFUL_MIN_STEPS ?= 32
 
-# Maximum number of operations generated per PostgreSQL history.
+# Maximum number of transitions generated per PostgreSQL state-machine case.
 STATEFUL_STEPS ?= 96
 
 # Optional deterministic Proptest seed for reproducing a campaign.
@@ -49,7 +49,7 @@ test-unit: ## Run unit and integration tests, excluding generated PostgreSQL his
 		--locked
 
 .PHONY: test-stateful
-test-stateful: ## Run generated histories against a real PostgreSQL database.
+test-stateful: ## Run generated state-machine cases against a real PostgreSQL database.
 	$(if $(STATEFUL_SEED),PROPTEST_RNG_SEED="$(STATEFUL_SEED)" )\
 	$(if $(STATEFUL_TRACE),STEDA_STATEFUL_TRACE="$(STATEFUL_TRACE)" )\
 	STEDA_STATEFUL_CASES="$(STATEFUL_CASES)" \
