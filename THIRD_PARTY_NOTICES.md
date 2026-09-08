@@ -4852,7 +4852,7 @@ Apache License 2.0
 #### Used by
 - [block-buffer]( https://github.com/RustCrypto/utils ) 0.10.4
 - [block-buffer]( https://github.com/RustCrypto/utils ) 0.12.1
-- [chacha20]( https://github.com/RustCrypto/stream-ciphers ) 0.10.1
+- [chacha20]( https://github.com/RustCrypto/stream-ciphers ) 0.10.2
 - [cpufeatures]( https://github.com/RustCrypto/utils ) 0.2.17
 - [cpufeatures]( https://github.com/RustCrypto/utils ) 0.3.0
 - [crypto-common]( https://github.com/RustCrypto/traits ) 0.1.6
