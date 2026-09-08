@@ -330,4 +330,4 @@ pub use types::{
     RetryStrategy, RunId, TaskId, TaskState,
 };
 pub use worker::{TaskExecutor, TaskHandler, Worker, WorkerBuilder};
-pub use workflow::{Sleep, Step};
+pub use workflow::{KeyedStep, Sleep, Step};

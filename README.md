@@ -214,6 +214,26 @@ let reservation = ctx
 
 If the task runs again, Steda replays the stored result rather than executing the step body again.
 
+Repeated workflows can keep the same static typed step definition while assigning durable runtime
+identity to each instance:
+
+```rust
+const PROCESS_ITEM: Step<ProcessedItem> = Step::new("process-item");
+
+for item in items {
+    let processed = ctx
+        .step_keyed(PROCESS_ITEM.keyed(item.id.to_string()), async || {
+            process(item).await
+        })
+        .await?;
+    consume(processed);
+}
+```
+
+The `(step, key)` pair is durable workflow identity. Reusing the same key replays the committed
+value; different keys are independent checkpoints and may execute concurrently. Keys should come
+from stable logical item identity rather than attempt-local counters.
+
 See [`multistep_workflow`](examples/multistep_workflow.rs) for a complete task composed from several typed steps.
 
 A checkpoint makes the Steda step replayable; it cannot make an external side effect exactly once. Use the external system's idempotency or fencing mechanism when that property is required.

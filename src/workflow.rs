@@ -36,6 +36,15 @@ impl<Output> Step<Output> {
     pub const fn name(self) -> &'static str {
         self.name
     }
+
+    /// Bind this static workflow step to one runtime identity.
+    ///
+    /// The key is persisted as part of the checkpoint identity and therefore must be stable across
+    /// retries of the same logical workflow item. Validation occurs when the keyed step is used by
+    /// [`crate::TaskContext::step_keyed`].
+    pub fn keyed(self, key: impl Into<String>) -> KeyedStep<Output> {
+        KeyedStep { step: self, key: key.into() }
+    }
 }
 
 impl<Output> Step<Output>
@@ -51,6 +60,46 @@ where
 impl<Output> fmt::Debug for Step<Output> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Step").field(&self.name).finish()
+    }
+}
+
+/// One runtime-keyed instance of a statically defined durable [`Step`].
+///
+/// Keyed steps preserve the static typed workflow definition while allowing a workflow to repeat
+/// the same operation for runtime-identified items such as pages, loop iterations, agent turns,
+/// or tool calls. The key is durable workflow identity: reusing the same step and key returns the
+/// previously committed value, while a different key creates an independent checkpoint.
+pub struct KeyedStep<Output> {
+    /// Static typed step definition shared by every instance.
+    step: Step<Output>,
+    /// Runtime identity of this particular step instance.
+    key: String,
+}
+
+impl<Output> Clone for KeyedStep<Output> {
+    fn clone(&self) -> Self {
+        Self { step: self.step, key: self.key.clone() }
+    }
+}
+
+impl<Output> KeyedStep<Output> {
+    /// Return the static step definition.
+    pub const fn step(&self) -> Step<Output> {
+        self.step
+    }
+
+    /// Return the runtime key identifying this step instance.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl<Output> fmt::Debug for KeyedStep<Output> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyedStep")
+            .field("step", &self.step.name())
+            .field("key", &self.key)
+            .finish()
     }
 }
 
