@@ -4,7 +4,7 @@ This page lists the licenses of the projects used in Steda.
 
 ## Overview of licenses
 
-- [Apache License 2.0](#Apache-2.0) (164)
+- [Apache License 2.0](#Apache-2.0) (165)
 - [MIT License](#MIT) (22)
 - [Unicode License v3](#Unicode-3.0) (19)
 - [ISC License](#ISC) (18)
@@ -3985,6 +3985,7 @@ Apache License 2.0
 - [parking_lot_core]( https://github.com/Amanieu/parking_lot ) 0.9.12
 - [percent-encoding]( https://github.com/servo/rust-url/ ) 2.3.2
 - [pkg-config]( https://github.com/rust-lang/pkg-config-rs ) 0.3.33
+- [proptest-state-machine]( https://github.com/proptest-rs/proptest ) 0.8.0
 - [proptest]( https://github.com/proptest-rs/proptest ) 1.11.0
 - [regex-syntax]( https://github.com/rust-lang/regex ) 0.8.11
 - [ring]( https://github.com/briansmith/ring ) 0.17.14

@@ -1,15 +1,15 @@
-//! Property-based task histories executed directly against `PostgreSQL`.
+//! Model-based property testing for Steda's durable task state machine.
 //!
-//! This suite intentionally has no reference state machine. Proptest generates
-//! task/run/checkpoint histories, including idempotent spawn replay, Steda executes
-//! them against real queue tables, and the harness audits storage invariants after
-//! every transition. Each operation also checks its observable `PostgreSQL`
-//! contract; stale mutations are sent to the database and must be rejected there
-//! rather than filtered out by the harness.
+//! `proptest-state-machine` owns history generation and shrinking. A small, independent
+//! reference model tracks durable facts that are intentionally cheap to specify (spawn
+//! identity and logical time), while every generated transition is executed against real
+//! PostgreSQL. The concrete adapter retains Steda's operation-level SQL contract checks
+//! and audits storage invariants after every transition. Historical/stale run mutations
+//! remain part of the transition vocabulary and are deliberately sent to PostgreSQL so
+//! fencing behavior is exercised rather than hidden by the model.
 //!
-//! Queue lifecycle, retention cleanup, Rust worker scheduling, and cross-queue
-//! result waits are tested deterministically elsewhere. They compose around this
-//! state machine rather than introducing additional task/run transitions here.
+//! Queue lifecycle, retention cleanup, Rust worker scheduling, and cross-queue result
+//! waits are tested deterministically elsewhere.
 
 #[cfg(test)]
 mod common;
@@ -19,13 +19,14 @@ mod tests {
     use std::{cell::RefCell, env, error::Error as StdError, fmt, io};
 
     use proptest::{
-        collection,
         prelude::*,
-        test_runner::{Config, TestRunner},
+        strategy::Union,
+        test_runner::Config,
     };
+    use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
     use serde::Serialize;
     use serde_json::{Value, json};
-    use sqlx::{AssertSqlSafe, PgConnection, PgPool, Row};
+    use sqlx::{AssertSqlSafe, PgConnection, PgPool, Postgres, Row, pool::PoolConnection};
     use time::{OffsetDateTime, SignedDuration};
     use uuid::Uuid;
 
@@ -316,91 +317,193 @@ mod tests {
             }
         }
 
-        fn merge(&mut self, other: &Self) {
-            for index in 0..self.attempted.len() {
-                self.attempted[index] += other.attempted[index];
-                self.affected[index] += other.affected[index];
-                self.rejected[index] += other.rejected[index];
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Model {
+        spawned_tasks: usize,
+        elapsed_seconds: u64,
+    }
+
+    impl Default for Model {
+        fn default() -> Self {
+            Self {
+                spawned_tasks: 1,
+                elapsed_seconds: 0,
             }
-            self.completion_cancellations += other.completion_cancellations;
-            for (total, value) in self.failure_outcomes.iter_mut().zip(&other.failure_outcomes) {
-                *total += *value;
-            }
-        }
-
-        fn attempted(&self, kind: OperationKind) -> usize {
-            self.attempted[kind.index()]
-        }
-
-        fn affected(&self, kind: OperationKind) -> usize {
-            self.affected[kind.index()]
-        }
-
-        fn rejected(&self, kind: OperationKind) -> usize {
-            self.rejected[kind.index()]
-        }
-
-        fn not_applied(&self, kind: OperationKind) -> usize {
-            self.attempted(kind)
-                .saturating_sub(self.affected(kind))
-                .saturating_sub(self.rejected(kind))
-        }
-
-        fn failure_outcome(&self, outcome: FailureOutcome) -> usize {
-            self.failure_outcomes[outcome.index()]
-        }
-
-        fn steps(&self) -> usize {
-            self.attempted.iter().sum()
         }
     }
 
-    fn operation_strategy() -> impl Strategy<Value = Operation> {
-        prop_oneof![
-            6 => (any::<bool>(), any::<u8>(), 1_u8..=4, 0_u8..=2, 0_u8..=2, 0_u8..=12)
-                .prop_map(|(alpha, payload, max_attempts, retry, cancellation, seconds)| {
-                    Operation::new(
-                        OperationKind::Spawn,
-                        [u8::from(alpha), payload, max_attempts, retry, cancellation, seconds],
-                    )
-                }),
-            3 => any::<u8>()
-                .prop_map(|task| Operation::new(OperationKind::Replay, [task, 0, 0, 0, 0, 0])),
-            7 => (any::<bool>(), 0_u8..=2, 1_u8..=5).prop_map(|(worker, capability, lease)| {
-                Operation::new(
-                    OperationKind::Claim,
-                    [u8::from(worker), capability, lease, 0, 0, 0],
-                )
-            }),
-            2 => (any::<u8>(), 1_u8..=10).prop_map(|(run, extension)| {
-                Operation::new(OperationKind::Supervise, [run, extension, 0, 0, 0, 0])
-            }),
-            4 => (any::<u8>(), any::<u8>()).prop_map(|(run, reason)| {
-                Operation::new(OperationKind::Fail, [run, reason, 0, 0, 0, 0])
-            }),
-            4 => (any::<u8>(), any::<u8>()).prop_map(|(run, value)| {
-                Operation::new(OperationKind::Complete, [run, value, 0, 0, 0, 0])
-            }),
-            3 => any::<u8>()
-                .prop_map(|task| Operation::new(OperationKind::Cancel, [task, 0, 0, 0, 0, 0])),
-            2 => any::<u8>()
-                .prop_map(|task| Operation::new(OperationKind::Retry, [task, 0, 0, 0, 0, 0])),
-            3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(run, step, value)| {
-                Operation::new(OperationKind::Checkpoint, [run, step, value, 0, 0, 0])
-            }),
-            3 => (any::<u8>(), 0_u8..=12).prop_map(|(run, seconds)| {
-                Operation::new(OperationKind::Sleep, [run, seconds, 0, 0, 0, 0])
-            }),
-            4 => (0_u8..=12).prop_map(|seconds| {
-                Operation::new(OperationKind::AdvanceTime, [seconds, 0, 0, 0, 0, 0])
-            }),
-            2 => (1_u8..=4).prop_map(|limit| {
-                Operation::new(OperationKind::ReapExpired, [limit, 0, 0, 0, 0, 0])
-            }),
-            2 => (1_u8..=4).prop_map(|limit| {
-                Operation::new(OperationKind::CancelExpired, [limit, 0, 0, 0, 0, 0])
-            }),
-        ]
+    #[derive(Debug, Clone, Copy)]
+    struct StedaStateMachine;
+
+    impl ReferenceStateMachine for StedaStateMachine {
+        type State = Model;
+        type Transition = Operation;
+
+        fn init_state() -> BoxedStrategy<Self::State> {
+            Just(Model::default()).boxed()
+        }
+
+        fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+            let mut transitions: Vec<(u32, BoxedStrategy<Operation>)> = vec![
+                (
+                    6,
+                    (any::<bool>(), any::<u8>(), 1_u8..=4, 0_u8..=2, 0_u8..=2, 0_u8..=12)
+                        .prop_map(|(alpha, payload, max_attempts, retry, cancellation, seconds)| {
+                            Operation::new(
+                                OperationKind::Spawn,
+                                [
+                                    u8::from(alpha),
+                                    payload,
+                                    max_attempts,
+                                    retry,
+                                    cancellation,
+                                    seconds,
+                                ],
+                            )
+                        })
+                        .boxed(),
+                ),
+                (
+                    7,
+                    (any::<bool>(), 0_u8..=2, 1_u8..=5)
+                        .prop_map(|(worker, capability, lease)| {
+                            Operation::new(
+                                OperationKind::Claim,
+                                [u8::from(worker), capability, lease, 0, 0, 0],
+                            )
+                        })
+                        .boxed(),
+                ),
+                (
+                    4,
+                    (0_u8..=12)
+                        .prop_map(|seconds| {
+                            Operation::new(OperationKind::AdvanceTime, [seconds, 0, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    2,
+                    (1_u8..=4)
+                        .prop_map(|limit| {
+                            Operation::new(OperationKind::ReapExpired, [limit, 0, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    2,
+                    (1_u8..=4)
+                        .prop_map(|limit| {
+                            Operation::new(OperationKind::CancelExpired, [limit, 0, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+            ];
+
+            if state.spawned_tasks > 0 {
+                transitions.extend([
+                    (
+                        3,
+                        any::<u8>()
+                            .prop_map(|task| {
+                                Operation::new(OperationKind::Replay, [task, 0, 0, 0, 0, 0])
+                            })
+                            .boxed(),
+                    ),
+                    (
+                        3,
+                        any::<u8>()
+                            .prop_map(|task| {
+                                Operation::new(OperationKind::Cancel, [task, 0, 0, 0, 0, 0])
+                            })
+                            .boxed(),
+                    ),
+                    (
+                        2,
+                        any::<u8>()
+                            .prop_map(|task| {
+                                Operation::new(OperationKind::Retry, [task, 0, 0, 0, 0, 0])
+                            })
+                            .boxed(),
+                    ),
+                ]);
+            }
+
+            // The initial task always has a run. Historical run selectors are retained on
+            // purpose: once retries create later attempts these transitions also probe stale
+            // attempt fencing, which PostgreSQL must reject.
+            transitions.extend([
+                (
+                    2,
+                    (any::<u8>(), 1_u8..=10)
+                        .prop_map(|(run, extension)| {
+                            Operation::new(OperationKind::Supervise, [run, extension, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    4,
+                    (any::<u8>(), any::<u8>())
+                        .prop_map(|(run, reason)| {
+                            Operation::new(OperationKind::Fail, [run, reason, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    4,
+                    (any::<u8>(), any::<u8>())
+                        .prop_map(|(run, value)| {
+                            Operation::new(OperationKind::Complete, [run, value, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    3,
+                    (any::<u8>(), any::<u8>(), any::<u8>())
+                        .prop_map(|(run, step, value)| {
+                            Operation::new(OperationKind::Checkpoint, [run, step, value, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+                (
+                    3,
+                    (any::<u8>(), 0_u8..=12)
+                        .prop_map(|(run, seconds)| {
+                            Operation::new(OperationKind::Sleep, [run, seconds, 0, 0, 0, 0])
+                        })
+                        .boxed(),
+                ),
+            ]);
+
+            Union::new_weighted(transitions).boxed()
+        }
+
+        fn apply(mut state: Self::State, transition: &Self::Transition) -> Self::State {
+            match transition.kind {
+                OperationKind::Spawn => state.spawned_tasks += 1,
+                OperationKind::AdvanceTime => {
+                    state.elapsed_seconds += u64::from(transition.args[0]);
+                }
+                OperationKind::Replay
+                | OperationKind::Claim
+                | OperationKind::Supervise
+                | OperationKind::Fail
+                | OperationKind::Complete
+                | OperationKind::Cancel
+                | OperationKind::Retry
+                | OperationKind::Checkpoint
+                | OperationKind::Sleep
+                | OperationKind::ReapExpired
+                | OperationKind::CancelExpired => {}
+            }
+            state
+        }
+
+        fn preconditions(_state: &Self::State, _transition: &Self::Transition) -> bool {
+            true
+        }
     }
 
     fn stateful_config() -> Config {
@@ -411,14 +514,14 @@ mod tests {
         }
     }
 
-    fn history_strategy() -> impl Strategy<Value = Vec<Operation>> {
+    fn stateful_history_size() -> std::ops::RangeInclusive<usize> {
         let minimum = env_usize("STEDA_STATEFUL_MIN_STEPS", 32);
         let maximum = env_usize("STEDA_STATEFUL_STEPS", 96);
         assert!(
             minimum <= maximum,
             "STEDA_STATEFUL_MIN_STEPS must not exceed STEDA_STATEFUL_STEPS"
         );
-        collection::vec(operation_strategy(), minimum..=maximum)
+        minimum..=maximum
     }
 
     fn env_u32(name: &str, default: u32) -> u32 {
@@ -1965,71 +2068,218 @@ mod tests {
         }
     }
 
-    async fn run_history(pool: &PgPool, history: &[Operation]) -> StatefulResult<Coverage> {
-        let queue = unique_queue("stateful");
-        let trace = env_flag("STEDA_STATEFUL_TRACE");
-        let mut connection = pool.acquire().await?;
-        set_initial_time(&mut connection).await?;
-        sqlx::query("SELECT steda.create_queue($1)").bind(&queue).execute(&mut *connection).await?;
+    struct PostgresUnderTest {
+        runtime: tokio::runtime::Handle,
+        connection: PoolConnection<Postgres>,
+        queue: String,
+        bindings: Bindings,
+        coverage: Coverage,
+        trace: bool,
+        step: usize,
+        observed_elapsed_seconds: u64,
+    }
 
-        let result = async {
+    impl Drop for PostgresUnderTest {
+        fn drop(&mut self) {
+            let queue = self.queue.clone();
+            let result = self.runtime.block_on(async {
+                sqlx::query("SELECT steda.drop_queue($1)")
+                    .bind(queue)
+                    .execute(&mut *self.connection)
+                    .await
+            });
+            if let Err(error) = result {
+                eprintln!("[stateful cleanup failed] {error}");
+            }
+        }
+    }
+
+    struct PostgresStateMachine;
+
+    std::thread_local! {
+        static STATEFUL_POOL: RefCell<Option<PgPool>> = const { RefCell::new(None) };
+        static STATEFUL_RUNTIME: RefCell<Option<tokio::runtime::Handle>> =
+            const { RefCell::new(None) };
+    }
+
+    struct StatefulContextGuard;
+
+    impl StatefulContextGuard {
+        fn install(pool: PgPool, runtime: tokio::runtime::Handle) -> Self {
+            STATEFUL_POOL.with(|slot| {
+                assert!(
+                    slot.borrow_mut().replace(pool).is_none(),
+                    "stateful pool already installed"
+                );
+            });
+            STATEFUL_RUNTIME.with(|slot| {
+                assert!(
+                    slot.borrow_mut().replace(runtime).is_none(),
+                    "stateful runtime already installed"
+                );
+            });
+            Self
+        }
+    }
+
+    impl Drop for StatefulContextGuard {
+        fn drop(&mut self) {
+            STATEFUL_RUNTIME.with(|slot| {
+                let _ = slot.borrow_mut().take();
+            });
+            STATEFUL_POOL.with(|slot| {
+                let _ = slot.borrow_mut().take();
+            });
+        }
+    }
+
+    fn stateful_pool() -> PgPool {
+        STATEFUL_POOL.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .expect("stateful test pool must be installed")
+                .clone()
+        })
+    }
+
+    fn stateful_runtime() -> tokio::runtime::Handle {
+        STATEFUL_RUNTIME.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .expect("stateful runtime must be installed")
+                .clone()
+        })
+    }
+
+    impl StateMachineTest for PostgresStateMachine {
+        type Reference = StedaStateMachine;
+        type SystemUnderTest = PostgresUnderTest;
+
+        fn init_test(reference: &Model) -> Self::SystemUnderTest {
+            let runtime = stateful_runtime();
+            let pool = stateful_pool();
+            let queue = unique_queue("stateful");
+            let trace = env_flag("STEDA_STATEFUL_TRACE");
             let mut bindings = Bindings::default();
-            let mut coverage = Coverage::default();
-            let initial_options = json!({
-                "maxAttempts": 3,
-                "retryStrategy": { "kind": "fixed", "baseSeconds": 0.0 },
-                "idempotencyKey": "stateful-initial"
-            });
-            let initial =
-                spawn(&mut connection, &queue, "alpha", 0, initial_options.clone()).await?;
-            ensure(initial.created, "initial stateful task was unexpectedly replayed")?;
-            bindings.tasks.push(initial.task_id);
-            bindings.spawns.push(SpawnRequest {
-                task_id: initial.task_id,
-                name: "alpha".to_owned(),
-                payload: 0,
-                options: initial_options,
-            });
-            refresh_bindings(&mut connection, &queue, &mut bindings).await?;
-            audit_invariants(&mut connection, &queue).await?;
 
+            let connection = runtime.block_on(async {
+                let mut connection =
+                    pool.acquire().await.expect("acquire stateful connection");
+                set_initial_time(&mut connection)
+                    .await
+                    .expect("install stateful fake clock");
+                sqlx::query("SELECT steda.create_queue($1)")
+                    .bind(&queue)
+                    .execute(&mut *connection)
+                    .await
+                    .expect("create stateful queue");
+                let initial_options = json!({
+                    "maxAttempts": 3,
+                    "retryStrategy": { "kind": "fixed", "baseSeconds": 0.0 },
+                    "idempotencyKey": "stateful-initial"
+                });
+                let initial = spawn(&mut connection, &queue, "alpha", 0, initial_options.clone())
+                    .await
+                    .expect("spawn initial stateful task");
+                assert!(
+                    initial.created,
+                    "initial stateful task was unexpectedly replayed"
+                );
+                bindings.tasks.push(initial.task_id);
+                bindings.spawns.push(SpawnRequest {
+                    task_id: initial.task_id,
+                    name: "alpha".to_owned(),
+                    payload: 0,
+                    options: initial_options,
+                });
+                refresh_bindings(&mut connection, &queue, &mut bindings)
+                    .await
+                    .expect("refresh initial stateful bindings");
+                audit_invariants(&mut connection, &queue)
+                    .await
+                    .expect("audit initial stateful invariants");
+                connection
+            });
+
+            assert_eq!(bindings.spawns.len(), reference.spawned_tasks);
             if trace {
                 eprintln!("[stateful setup] task#0 alpha -> run#0 pending; invariants hold");
             }
+            PostgresUnderTest {
+                runtime,
+                connection,
+                queue,
+                bindings,
+                coverage: Coverage::default(),
+                trace,
+                step: 0,
+                observed_elapsed_seconds: 0,
+            }
+        }
 
-            for (index, operation) in history.iter().copied().enumerate() {
-                let step = index + 1;
-                let outcome = apply_operation(&mut connection, &queue, &mut bindings, operation)
+        fn apply(
+            mut state: Self::SystemUnderTest,
+            _reference: &Model,
+            transition: Operation,
+        ) -> Self::SystemUnderTest {
+            state.step += 1;
+            let step = state.step;
+            let runtime = &state.runtime;
+            let queue = &state.queue;
+            let bindings = &mut state.bindings;
+            let connection = &mut state.connection;
+            let outcome = runtime.block_on(async {
+                let outcome = apply_operation(connection, queue, bindings, transition)
                     .await
                     .map_err(|error| {
-                        stateful_error(format!("step {step} {operation:?}: {error}"))
+                        stateful_error(format!("step {step} {transition:?}: {error}"))
                     })?;
-                refresh_bindings(&mut connection, &queue, &mut bindings).await.map_err(
-                    |error| {
-                        stateful_error(format!(
-                            "step {step} after {}: refresh failed: {error}",
-                            outcome.message,
-                        ))
-                    },
-                )?;
-                audit_invariants(&mut connection, &queue).await.map_err(|error| {
+                refresh_bindings(connection, queue, bindings).await.map_err(|error| {
+                    stateful_error(format!(
+                        "step {step} after {}: refresh failed: {error}",
+                        outcome.message,
+                    ))
+                })?;
+                audit_invariants(connection, queue).await.map_err(|error| {
                     stateful_error(format!("step {step} after {}: {error}", outcome.message))
                 })?;
-                coverage.record(operation.kind, &outcome);
-                if trace {
-                    eprintln!("[stateful step {step}] {}; invariants hold", outcome.message);
-                }
+                let now = current_time(connection).await?;
+                let initial = OffsetDateTime::from_unix_timestamp(1_893_456_000)
+                    .map_err(|error| {
+                        stateful_error(format!("construct initial fake clock: {error}"))
+                    })?;
+                let elapsed_seconds = u64::try_from((now - initial).whole_seconds())
+                    .map_err(|_| stateful_error("fake clock moved backwards"))?;
+                Ok::<_, BoxError>((outcome, elapsed_seconds))
+            });
+            let (outcome, elapsed_seconds) =
+                outcome.unwrap_or_else(|error| {
+                    panic!("PostgreSQL stateful transition failed: {error}")
+                });
+            state.observed_elapsed_seconds = elapsed_seconds;
+            state.coverage.record(transition.kind, &outcome);
+            if state.trace {
+                eprintln!("[stateful step {step}] {}; invariants hold", outcome.message);
             }
-            Ok(coverage)
+            state
         }
-        .await;
 
-        let cleanup =
-            sqlx::query("SELECT steda.drop_queue($1)").bind(&queue).execute(&mut *connection).await;
-        match (result, cleanup) {
-            (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Ok(coverage), Ok(_)) => Ok(coverage),
+        fn check_invariants(state: &Self::SystemUnderTest, reference: &Model) {
+            assert_eq!(
+                state.bindings.spawns.len(),
+                reference.spawned_tasks,
+                "reference model and PostgreSQL disagree on durable spawn count",
+            );
+            assert_eq!(
+                state.bindings.tasks.len(),
+                reference.spawned_tasks,
+                "reference model and PostgreSQL disagree on task cardinality",
+            );
+            assert_eq!(
+                state.observed_elapsed_seconds,
+                reference.elapsed_seconds,
+                "reference model and PostgreSQL disagree on logical time",
+            );
         }
     }
 
@@ -2037,88 +2287,21 @@ mod tests {
     async fn generated_histories_preserve_postgres_contracts(pool: PgPool) {
         let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let strategy = history_strategy();
-            let config = stateful_config();
-            let cases = config.cases;
-            let mut runner = TestRunner::new(config);
-            let coverage = RefCell::new(Coverage::default());
-
-            let result = runner.run(&strategy, |history| {
-                let history_coverage = runtime
-                    .block_on(run_history(&pool, &history))
-                    .map_err(|error| TestCaseError::fail(error.to_string()))?;
-                coverage.borrow_mut().merge(&history_coverage);
-                Ok(())
+            let _context_guard = StatefulContextGuard::install(pool, runtime);
+            proptest::proptest!(stateful_config(), |(
+                (initial_state, transitions, seen_counter) in
+                    StedaStateMachine::sequential_strategy(stateful_history_size())
+            )| {
+                PostgresStateMachine::test_sequential(
+                    stateful_config(),
+                    initial_state,
+                    transitions,
+                    seen_counter,
+                );
             });
-            if let Err(error) = result {
-                panic!("PostgreSQL stateful property failed: {error}");
-            }
-            let coverage = coverage.into_inner();
-            eprintln!(
-                "[stateful] PASS: {cases} histories, {} generated transitions; PostgreSQL invariants and operation contracts held after every transition",
-                coverage.steps(),
-            );
-            eprintln!(
-                "[stateful] workload: generated_spawns={} | idempotent_replays={} | runs_claimed={} ({} empty claims) | supervised_run_changes={}",
-                coverage.affected(OperationKind::Spawn),
-                coverage.affected(OperationKind::Replay),
-                coverage.affected(OperationKind::Claim),
-                coverage.not_applied(OperationKind::Claim),
-                coverage.affected(OperationKind::Supervise),
-            );
-            eprintln!(
-                "[stateful] durable control: manual_retries={} | checkpoint_writes={} ({} replay/skipped) | sleeps_suspended_or_cancelled={} ({} ready/skipped)",
-                coverage.affected(OperationKind::Retry),
-                coverage.affected(OperationKind::Checkpoint),
-                coverage.not_applied(OperationKind::Checkpoint),
-                coverage.affected(OperationKind::Sleep),
-                coverage.not_applied(OperationKind::Sleep),
-            );
-            eprintln!(
-                "[stateful] outcomes: tasks_completed={} | completion_policy_cancellations={} | direct_task_cancellations={} | failed_runs={} -> \
-                 retry_ready={}, retry_scheduled={}, task_failed={}, task_cancelled={}",
-                coverage
-                    .affected(OperationKind::Complete)
-                    .saturating_sub(coverage.completion_cancellations),
-                coverage.completion_cancellations,
-                coverage.affected(OperationKind::Cancel),
-                coverage.affected(OperationKind::Fail),
-                coverage.failure_outcome(FailureOutcome::RetryReady),
-                coverage.failure_outcome(FailureOutcome::RetryScheduled),
-                coverage.failure_outcome(FailureOutcome::TerminalFailed),
-                coverage.failure_outcome(FailureOutcome::Cancelled),
-            );
-            eprintln!(
-                "[stateful] maintenance: nonzero_time_advances={}/{} calls | expired_runs_reaped={} across {} sweeps | \
-                 policy_cancellations={} across {} sweeps",
-                coverage.affected(OperationKind::AdvanceTime),
-                coverage.attempted(OperationKind::AdvanceTime),
-                coverage.affected(OperationKind::ReapExpired),
-                coverage.attempted(OperationKind::ReapExpired),
-                coverage.affected(OperationKind::CancelExpired),
-                coverage.attempted(OperationKind::CancelExpired),
-            );
-            eprintln!(
-                "[stateful] rejected mutations exercised against PostgreSQL: supervisions={} | failures={} | completions={} | retries={} | checkpoints={} | sleeps={}",
-                coverage.rejected(OperationKind::Supervise),
-                coverage.rejected(OperationKind::Fail),
-                coverage.rejected(OperationKind::Complete),
-                coverage.rejected(OperationKind::Retry),
-                coverage.rejected(OperationKind::Checkpoint),
-                coverage.rejected(OperationKind::Sleep),
-            );
-            eprintln!(
-                "[stateful] no-op/skipped: supervision={} | fail={} | complete={} | cancel_terminal_or_missing={} | retry={} | checkpoint={} | sleep={}",
-                coverage.not_applied(OperationKind::Supervise),
-                coverage.not_applied(OperationKind::Fail),
-                coverage.not_applied(OperationKind::Complete),
-                coverage.not_applied(OperationKind::Cancel),
-                coverage.not_applied(OperationKind::Retry),
-                coverage.not_applied(OperationKind::Checkpoint),
-                coverage.not_applied(OperationKind::Sleep),
-            );
         })
         .await
-        .expect("run PostgreSQL stateful property test");
+        .expect("run PostgreSQL state-machine campaign");
     }
+
 }
