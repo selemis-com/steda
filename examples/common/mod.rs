@@ -4,7 +4,7 @@
 //! these helpers intentionally keep each example self-contained and finite.
 
 use std::{
-    env, process,
+    process,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -18,7 +18,7 @@ use tokio::{sync::oneshot, task::JoinHandle};
 /// Returns an error when `DATABASE_URL` is absent, `PostgreSQL` cannot be reached,
 /// or the bundled Steda schema cannot be applied.
 pub(super) async fn connect() -> Result<Steda> {
-    let database_url = env::var("DATABASE_URL").map_err(|_| {
+    let database_url = dotenvy::var("DATABASE_URL").map_err(|_| {
         Error::Other(
             "DATABASE_URL is not set; point it at a PostgreSQL database before running this example"
                 .to_owned(),
