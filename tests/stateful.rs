@@ -18,11 +18,7 @@ mod common;
 mod tests {
     use std::{cell::RefCell, env, error::Error as StdError, fmt, io};
 
-    use proptest::{
-        prelude::*,
-        strategy::Union,
-        test_runner::Config,
-    };
+    use proptest::{prelude::*, strategy::Union, test_runner::Config};
     use proptest_state_machine::{ReferenceStateMachine, StateMachineTest};
     use serde::Serialize;
     use serde_json::{Value, json};
@@ -1407,15 +1403,13 @@ mod tests {
                 let [worker, lease_seconds, _, _, _, _] = operation.args;
                 let worker_id = worker_name(worker);
                 let task_names = ["__steda_stateful_no_such_task__"];
-                let row = sqlx::query(
-                    "SELECT run_id FROM steda.claim_tasks($1, $2, $3, 1, $4)",
-                )
-                .bind(queue)
-                .bind(worker_id)
-                .bind(i32::from(lease_seconds))
-                .bind(task_names.as_slice())
-                .fetch_optional(&mut *connection)
-                .await?;
+                let row = sqlx::query("SELECT run_id FROM steda.claim_tasks($1, $2, $3, 1, $4)")
+                    .bind(queue)
+                    .bind(worker_id)
+                    .bind(i32::from(lease_seconds))
+                    .bind(task_names.as_slice())
+                    .fetch_optional(&mut *connection)
+                    .await?;
                 ensure(row.is_none(), "empty-claim probe unexpectedly claimed a run")?;
                 Ok(outcome(
                     format!(
@@ -1993,11 +1987,11 @@ mod tests {
                         let mut selected = None;
                         for offset in 0..bindings.runs.len() {
                             let candidate = bindings.runs[(start + offset) % bindings.runs.len()];
-                            let Some(status) = fetch_run(connection, queue, candidate).await? else {
+                            let Some(status) = fetch_run(connection, queue, candidate).await?
+                            else {
                                 continue;
                             };
-                            let Some(task) =
-                                fetch_task(connection, queue, status.task_id).await?
+                            let Some(task) = fetch_task(connection, queue, status.task_id).await?
                             else {
                                 continue;
                             };
@@ -2020,7 +2014,8 @@ mod tests {
                         let Some(status) = fetch_run(connection, queue, candidate).await? else {
                             continue;
                         };
-                        let Some(task) = fetch_task(connection, queue, status.task_id).await? else {
+                        let Some(task) = fetch_task(connection, queue, status.task_id).await?
+                        else {
                             continue;
                         };
                         if expected_run_rejection(&status, now).is_some()
@@ -2159,17 +2154,15 @@ mod tests {
                 let now = current_time(connection).await?;
                 let mut selected = None;
                 for offset in 0..bindings.checkpoints.len() {
-                    let candidate = bindings.checkpoints
-                        [(start + offset) % bindings.checkpoints.len()]
-                        .clone();
+                    let candidate =
+                        bindings.checkpoints[(start + offset) % bindings.checkpoints.len()].clone();
                     let Some(run) = fetch_run(connection, queue, candidate.run_id).await? else {
                         continue;
                     };
                     let Some(task) = fetch_task(connection, queue, candidate.task_id).await? else {
                         continue;
                     };
-                    if expected_run_rejection(&run, now).is_none()
-                        && !max_duration_due(&task, now)
+                    if expected_run_rejection(&run, now).is_none() && !max_duration_due(&task, now)
                     {
                         selected = Some(candidate);
                         break;
@@ -2201,14 +2194,10 @@ mod tests {
                     replayed_state == checkpoint.state,
                     "checkpoint replay returned a different committed value",
                 )?;
-                let stored = fetch_checkpoint_state(
-                    connection,
-                    queue,
-                    checkpoint.task_id,
-                    &checkpoint.name,
-                )
-                .await?
-                .ok_or_else(|| stateful_error("checkpoint disappeared during replay"))?;
+                let stored =
+                    fetch_checkpoint_state(connection, queue, checkpoint.task_id, &checkpoint.name)
+                        .await?
+                        .ok_or_else(|| stateful_error("checkpoint disappeared during replay"))?;
                 ensure(
                     stored == checkpoint.state,
                     "checkpoint replay mutated the committed value",
@@ -2472,28 +2461,19 @@ mod tests {
 
     fn stateful_pool() -> PgPool {
         STATEFUL_POOL.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .expect("stateful test pool must be installed")
-                .clone()
+            slot.borrow().as_ref().expect("stateful test pool must be installed").clone()
         })
     }
 
     fn stateful_runtime() -> tokio::runtime::Handle {
         STATEFUL_RUNTIME.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .expect("stateful runtime must be installed")
-                .clone()
+            slot.borrow().as_ref().expect("stateful runtime must be installed").clone()
         })
     }
 
     fn stateful_coverage() -> Coverage {
         STATEFUL_COVERAGE.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .expect("stateful coverage must be installed")
-                .clone()
+            slot.borrow().as_ref().expect("stateful coverage must be installed").clone()
         })
     }
 
@@ -2509,11 +2489,8 @@ mod tests {
             let mut bindings = Bindings::default();
 
             let connection = runtime.block_on(async {
-                let mut connection =
-                    pool.acquire().await.expect("acquire stateful connection");
-                set_initial_time(&mut connection)
-                    .await
-                    .expect("install stateful fake clock");
+                let mut connection = pool.acquire().await.expect("acquire stateful connection");
+                set_initial_time(&mut connection).await.expect("install stateful fake clock");
                 sqlx::query("SELECT steda.create_queue($1)")
                     .bind(&queue)
                     .execute(&mut *connection)
@@ -2527,10 +2504,7 @@ mod tests {
                 let initial = spawn(&mut connection, &queue, "alpha", 0, initial_options.clone())
                     .await
                     .expect("spawn initial stateful task");
-                assert!(
-                    initial.created,
-                    "initial stateful task was unexpectedly replayed"
-                );
+                assert!(initial.created, "initial stateful task was unexpectedly replayed");
                 bindings.tasks.push(initial.task_id);
                 bindings.spawns.push(SpawnRequest {
                     task_id: initial.task_id,
@@ -2575,11 +2549,10 @@ mod tests {
             let bindings = &mut state.bindings;
             let connection = &mut state.connection;
             let outcome = runtime.block_on(async {
-                let outcome = apply_operation(connection, queue, bindings, transition)
-                    .await
-                    .map_err(|error| {
-                        stateful_error(format!("step {step} {transition:?}: {error}"))
-                    })?;
+                let outcome =
+                    apply_operation(connection, queue, bindings, transition).await.map_err(
+                        |error| stateful_error(format!("step {step} {transition:?}: {error}")),
+                    )?;
                 refresh_bindings(connection, queue, bindings).await.map_err(|error| {
                     stateful_error(format!(
                         "step {step} after {}: refresh failed: {error}",
@@ -2590,18 +2563,16 @@ mod tests {
                     stateful_error(format!("step {step} after {}: {error}", outcome.message))
                 })?;
                 let now = current_time(connection).await?;
-                let initial = OffsetDateTime::from_unix_timestamp(1_893_456_000)
-                    .map_err(|error| {
+                let initial =
+                    OffsetDateTime::from_unix_timestamp(1_893_456_000).map_err(|error| {
                         stateful_error(format!("construct initial fake clock: {error}"))
                     })?;
                 let elapsed_seconds = u64::try_from((now - initial).whole_seconds())
                     .map_err(|_| stateful_error("fake clock moved backwards"))?;
                 Ok::<_, BoxError>((outcome, elapsed_seconds))
             });
-            let (outcome, elapsed_seconds) =
-                outcome.unwrap_or_else(|error| {
-                    panic!("PostgreSQL stateful transition failed: {error}")
-                });
+            let (outcome, elapsed_seconds) = outcome
+                .unwrap_or_else(|error| panic!("PostgreSQL stateful transition failed: {error}"));
             state.observed_elapsed_seconds = elapsed_seconds;
             state.coverage.record(transition.kind, &outcome);
             if state.trace {
@@ -2622,8 +2593,7 @@ mod tests {
                 "reference model and PostgreSQL disagree on task cardinality",
             );
             assert_eq!(
-                state.observed_elapsed_seconds,
-                reference.elapsed_seconds,
+                state.observed_elapsed_seconds, reference.elapsed_seconds,
                 "reference model and PostgreSQL disagree on logical time",
             );
         }
@@ -2722,5 +2692,4 @@ mod tests {
         .await
         .expect("run PostgreSQL state-machine campaign");
     }
-
 }
