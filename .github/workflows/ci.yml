@@ -16,6 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_BUILD_WARNINGS: deny
   RUST_BACKTRACE: full
+  SCCACHE_GHA_ENABLED: "true"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -240,10 +241,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install stable Rust toolchain
+      - name: Install nightly Rust toolchain
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -254,7 +255,9 @@ jobs:
           cache-on-failure: true
 
       - name: Run documentation tests
-        run: make test-doc && make doc
+        run: |
+          make test-doc
+          CARGO_BUILD_WARNINGS=warn make doc
 
   lint-clippy:
     runs-on: ubuntu-latest
