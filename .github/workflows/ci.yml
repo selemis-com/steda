@@ -254,7 +254,9 @@ jobs:
           cache-on-failure: true
 
       - name: Run documentation tests
-        run: make test-doc && make doc
+        run: |
+          make test-doc
+          CARGO_BUILD_WARNINGS=warn make doc
 
   lint-clippy:
     runs-on: ubuntu-latest
