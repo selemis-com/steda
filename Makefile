@@ -64,7 +64,7 @@ test-stateful: ## Run generated state-machine cases against a real PostgreSQL da
 
 .PHONY: test-doc
 test-doc: ## Run doc tests.
-	cargo test \
+	cargo +nightly test \
 		--doc \
 		--workspace \
 		--all-features \
