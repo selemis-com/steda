@@ -3990,7 +3990,7 @@ Apache License 2.0
 - [regex-syntax]( https://github.com/rust-lang/regex ) 0.8.11
 - [ring]( https://github.com/briansmith/ring ) 0.17.14
 - [rustix]( https://github.com/bytecodealliance/rustix ) 1.1.4
-- [rustls]( https://github.com/rustls/rustls ) 0.23.43
+- [rustls]( https://github.com/rustls/rustls ) 0.23.45
 - [rusty-fork]( https://github.com/altsysrq/rusty-fork ) 0.3.1
 - [scopeguard]( https://github.com/bluss/scopeguard ) 1.2.0
 - [security-framework-sys]( https://github.com/kornelski/rust-security-framework ) 2.17.0
@@ -6709,7 +6709,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ISC License
 
 #### Used by
-- [rustls-webpki]( https://github.com/rustls/webpki ) 0.103.13
+- [rustls-webpki]( https://github.com/rustls/webpki ) 0.103.15
 
 #### License
 ```
