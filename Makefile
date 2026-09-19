@@ -183,7 +183,7 @@ deny: ## Perform a `cargo deny` check.
 
 .PHONY: about
 about: THIRD_PARTY_NOTICES.md ## Generate the `THIRD_PARTY_NOTICES.md` file.
-THIRD_PARTY_NOTICES.md: Cargo.lock Cargo.toml crates/*/Cargo.toml .github/about.toml .github/about.hbs
+THIRD_PARTY_NOTICES.md: Cargo.lock Cargo.toml .github/about.toml .github/about.hbs
 	cargo about generate -c .github/about.toml -o $@ .github/about.hbs --locked
 
 .PHONY: sql
