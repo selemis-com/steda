@@ -320,6 +320,12 @@ pub mod middleware {
     };
 }
 
+/// Complete re-applicable PostgreSQL schema artifact for this Steda release.
+///
+/// Applications that own database bootstrap may apply this SQL atomically before starting
+/// producers or workers. Reapply the value from the new Steda release when upgrading.
+pub const SCHEMA_SQL: &str = include_str!("../sql/steda.sql");
+
 pub use context::{TaskContext, TaskWait};
 pub use error::{Error, Result};
 pub use queue::Queue;
