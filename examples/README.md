@@ -11,9 +11,10 @@ Set `DATABASE_URL` to a PostgreSQL database that the current user can use:
 export DATABASE_URL=postgres://steda:steda@127.0.0.1:5432/steda_test
 ```
 
-Every example applies the bundled `sql/steda.sql` schema and creates its own `example-*` queue.
-Production deployments apply the matching release's `steda.sql` before starting producers and
-workers.
+Every example applies [`steda::SCHEMA_SQL`](https://docs.rs/steda/latest/steda/constant.SCHEMA_SQL.html) 
+and creates its own `example-*` queue. Production Rust applications should likewise apply the bundled schema 
+atomically before starting producers and workers; deployments that install schemas outside Rust can use the
+equivalent `steda.sql` release artifact.
 
 ## `basic_task`
 
