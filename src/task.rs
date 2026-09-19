@@ -407,9 +407,10 @@ impl<T> TaskSnapshot<T> {
 
 /// Typed runtime handle to one logical task.
 ///
-/// A handle attaches a durable [`TaskRef`] to this process's Steda connection so the task can be
-/// observed or controlled. Use [`Steda::task`](crate::Steda::task) to reattach a deserialized task
-/// reference after a process restart.
+/// A handle attaches one durable task to this process's Steda connection so the task can be
+/// observed or controlled. Use [`Steda::task`](crate::Steda::task) to reattach a deserialized
+/// [`TaskRef`], or [`Queue::task`](crate::Queue::task) when the application already has the typed
+/// task definition, queue, and [`TaskId`].
 pub struct TaskHandle<Input, Output> {
     /// Queue used to observe and control this task.
     queue: Queue,
