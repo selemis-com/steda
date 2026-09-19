@@ -110,6 +110,24 @@ impl Queue {
         Spawn::new(self, task, input)
     }
 
+    /// Attach a known typed task definition to an existing logical task ID in this queue.
+    ///
+    /// The returned handle is lightweight and does not query the database until the task is
+    /// observed or controlled. This is useful when an application persists a [`TaskId`] alongside
+    /// its own state and already knows the task definition and queue that produced it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the task definition has an invalid persisted name.
+    pub fn task<Input, Output>(
+        &self,
+        task: Task<Input, Output>,
+        task_id: TaskId,
+    ) -> Result<TaskHandle<Input, Output>> {
+        validate_task_name(task.name())?;
+        Ok(TaskHandle::new(self.clone(), task, task_id))
+    }
+
     /// Serialize and persist a typed task spawn through this queue's pool.
     pub(crate) async fn spawn_typed<Input, Output>(
         &self,

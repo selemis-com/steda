@@ -13,7 +13,7 @@ mod tests {
 
     use serde_json::{Value, json};
     use sqlx::PgPool;
-    use steda::{Error, Result, Steda, Task, TaskId, TaskRef, TaskSnapshot, TaskState};
+    use steda::{Error, Result, Steda, Task, TaskId, TaskSnapshot, TaskState};
     use tokio::{
         sync::{Notify, Semaphore, oneshot},
         time::timeout,
@@ -23,6 +23,7 @@ mod tests {
     use super::{common::unique_queue, worker_support::run_worker_for_claims};
 
     const RESULT_PROBE: Task<Value, Value> = Task::new("result-probe");
+    const DIFFERENT_RESULT_PROBE: Task<Value, Value> = Task::new("different-result-probe");
 
     #[sqlx::test(migrations = "./sql/migrations")]
     async fn task_handle_result_reports_failure(pool: PgPool) -> Result<()> {
@@ -110,12 +111,7 @@ mod tests {
         app.create().await?;
 
         let task_id = TaskId::from_uuid(Uuid::now_v7());
-        let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
-            "queueName": app.name(),
-            "taskName": RESULT_PROBE.name(),
-            "taskId": task_id,
-        }))?;
-        let task = steda.task(&task_ref)?;
+        let task = app.task(RESULT_PROBE, task_id)?;
         assert_eq!(task.snapshot().await?, None);
 
         app.delete().await?;
@@ -130,12 +126,7 @@ mod tests {
         app.create().await?;
 
         let task_id = TaskId::from_uuid(Uuid::now_v7());
-        let task_ref: TaskRef<Value, Value> = serde_json::from_value(json!({
-            "queueName": app.name(),
-            "taskName": RESULT_PROBE.name(),
-            "taskId": task_id,
-        }))?;
-        let task = steda.task(&task_ref)?;
+        let task = app.task(RESULT_PROBE, task_id)?;
         let error = task
             .result_with_timeout(Duration::ZERO)
             .await
@@ -149,17 +140,14 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "./sql/migrations")]
-    async fn reattached_task_reference_enforces_persisted_task_name(pool: PgPool) -> Result<()> {
+    async fn reattached_task_enforces_persisted_task_name(pool: PgPool) -> Result<()> {
         let queue = unique_queue("result_task_name");
         let steda = Steda::from_pool(pool);
         let app = steda.queue(queue)?;
         app.create().await?;
 
         let spawned = app.spawn(RESULT_PROBE, json!({})).await?;
-        let mut encoded = serde_json::to_value(spawned.task_ref())?;
-        encoded["taskName"] = json!("different-task");
-        let mismatched_ref: TaskRef<Value, Value> = serde_json::from_value(encoded)?;
-        let mismatched = steda.task(&mismatched_ref)?;
+        let mismatched = app.task(DIFFERENT_RESULT_PROBE, spawned.task_id())?;
 
         for error in [
             mismatched.snapshot().await.expect_err("snapshot must reject mismatched task name"),
