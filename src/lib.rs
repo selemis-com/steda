@@ -10,10 +10,11 @@
 //!
 //! # Installation
 //!
-//! Add the `steda` crate and apply the `sql/steda.sql` file from the same release to the target
-//! database before producers or workers start. Apply it atomically. With `psql`, use
-//! `--single-transaction -v ON_ERROR_STOP=1`. Reapply the new release's `steda.sql` the same way
-//! when upgrading.
+//! Add the `steda` crate and apply [`SCHEMA_SQL`] atomically to the target database before
+//! producers or workers start. This is the recommended installation path because the bundled
+//! schema always matches the linked Steda crate release. Reapply [`SCHEMA_SQL`] from the new
+//! release when upgrading. Deployments that install schemas outside Rust can use the equivalent
+//! `steda.sql` artifact published with each release.
 //!
 //! Steda has no default crate features. Enable `tls-rustls` or `tls-native-tls` when
 //! [`Steda::connect`] needs TLS support.
@@ -208,8 +209,10 @@
 //!
 //! ## Schema and queue lifecycle
 //!
-//! Apply the `sql/steda.sql` file from the Steda release before code that depends on that schema
-//! begins spawning or claiming work. Apply the new release's file again when upgrading.
+//! Apply [`SCHEMA_SQL`] atomically before code that depends on the Steda schema begins spawning
+//! or claiming work. Reapply the value bundled with the new crate release when upgrading. The
+//! release `steda.sql` artifact contains the same schema for deployments that install it outside
+//! Rust.
 //!
 //! [`Steda::queue`] creates a lightweight handle only. [`Queue::create`] creates its durable
 //! queue-specific `PostgreSQL` storage and is idempotent for a healthy existing queue. Repeated
@@ -322,8 +325,10 @@ pub mod middleware {
 
 /// Complete re-applicable PostgreSQL schema artifact for this Steda release.
 ///
-/// Applications that own database bootstrap may apply this SQL atomically before starting
-/// producers or workers. Reapply the value from the new Steda release when upgrading.
+/// Applying this SQL atomically during database bootstrap is the recommended way to install
+/// Steda's schema because it always matches the linked crate release. Reapply the value from the
+/// new Steda release when upgrading. Deployments that install schemas outside Rust can use the
+/// equivalent `steda.sql` release artifact.
 pub const SCHEMA_SQL: &str = include_str!("../sql/steda.sql");
 
 pub use context::{TaskContext, TaskWait};

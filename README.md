@@ -50,15 +50,30 @@ Steda requires PostgreSQL 18+. See [MSRV](#msrv) for supported Rust versions.
 cargo add steda
 ```
 
-Download `steda.sql` from the matching [Steda release](https://github.com/selemis-com/steda/releases) and apply it atomically before starting producers or workers:
+Apply [`steda::SCHEMA_SQL`](https://docs.rs/steda/latest/steda/constant.SCHEMA_SQL.html)
+atomically before starting producers or workers. This is the recommended integration path because
+the bundled schema always matches the linked Steda crate release.
+
+For example, applications that already use SQLx can apply it during database bootstrap:
+
+```rust
+sqlx::raw_sql(steda::SCHEMA_SQL).execute(&pool).await?;
+```
+
+If schema installation is managed outside Rust, each
+[Steda release](https://github.com/selemis-com/steda/releases) also publishes the same schema as
+`steda.sql`:
 
 ```sh
 psql "$DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f steda.sql
 ```
 
-Applications that own database bootstrap can instead apply [`steda::SCHEMA_SQL`](https://docs.rs/steda/latest/steda/constant.SCHEMA_SQL.html) from the linked crate release in the same atomic manner.
-
-When upgrading Steda, apply the new release's `steda.sql` the same way before starting binaries built against that release. Database upgrades remain compatible within a major release line. A future major release may introduce breaking storage changes and require an explicit migration procedure, such as draining workers or running a one-time upgrade script. Any such requirements will be documented in the release notes. Mixed-version deployments are not guaranteed unless a release explicitly states otherwise.
+When upgrading Steda, reapply `SCHEMA_SQL` from the new crate release, or the matching
+`steda.sql` artifact, before starting binaries built against that release. Database upgrades remain
+compatible within a major release line. A future major release may introduce breaking storage
+changes and require an explicit migration procedure, such as draining workers or running a one-time
+upgrade script. Any such requirements will be documented in the release notes. Mixed-version
+deployments are not guaranteed unless a release explicitly states otherwise.
 
 ## Features
 

@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use steda::{Error, Result, Steda, Worker};
+use steda::{Error, Result, SCHEMA_SQL, Steda, Worker};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 /// Connect to `PostgreSQL` and apply the bundled Steda schema for an example run.
@@ -25,7 +25,7 @@ pub(super) async fn connect() -> Result<Steda> {
         )
     })?;
     let steda = Steda::connect(&database_url).await?;
-    sqlx::raw_sql(include_str!("../../sql/steda.sql")).execute(steda.pool()).await?;
+    sqlx::raw_sql(SCHEMA_SQL).execute(steda.pool()).await?;
     Ok(steda)
 }
 
