@@ -332,7 +332,7 @@ pub mod middleware {
 pub const SCHEMA_SQL: &str = include_str!("../sql/steda.sql");
 
 pub use context::{TaskContext, TaskWait};
-pub use error::{Error, Result};
+pub use error::{BoxError, Error, Result};
 pub use queue::Queue;
 pub use steda::{Steda, StedaBuilder};
 pub use task::{Spawn, SpawnedTask, Task, TaskHandle, TaskRef, TaskSnapshot};
