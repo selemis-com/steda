@@ -269,6 +269,8 @@ fn is_transient_sqlstate(code: &str) -> bool {
 /// struct ProvisionedExecutor;
 ///
 /// impl TaskExecutor<i64, i64> for ProvisionedExecutor {
+///     type Error = steda::Error;
+///
 ///     fn execute(
 ///         &self,
 ///         input: i64,
@@ -300,6 +302,12 @@ fn is_transient_sqlstate(code: &str) -> bool {
 /// must ensure dropping its future also terminates or fences that work so it cannot keep
 /// acting as the no-longer-owned attempt.
 pub trait TaskExecutor<Input, Output>: Send + Sync + 'static {
+    /// Error returned by this executor.
+    ///
+    /// Steda converts this once at the worker boundary, allowing executor
+    /// implementations to use their own domain error type internally.
+    type Error: Into<Error> + Send + 'static;
+
     /// Execute one typed task attempt.
     ///
     /// # Errors
@@ -310,7 +318,7 @@ pub trait TaskExecutor<Input, Output>: Send + Sync + 'static {
         &self,
         input: Input,
         context: TaskContext,
-    ) -> impl Future<Output = Result<Output>> + Send;
+    ) -> impl Future<Output = std::result::Result<Output, Self::Error>> + Send;
 }
 
 /// Reusable in-process async handler accepted by [`WorkerBuilder::task`].
@@ -337,6 +345,8 @@ impl<Input, Output, F> TaskExecutor<Input, Output> for F
 where
     F: TaskHandler<Input, Output>,
 {
+    type Error = Error;
+
     fn execute(
         &self,
         input: Input,
@@ -488,7 +498,7 @@ impl WorkerBuilder {
             let executor = Arc::clone(&executor);
             Box::pin(async move {
                 let input = serde_json::from_value::<Input>(raw)?;
-                let output = executor.execute(input, context).await?;
+                let output = executor.execute(input, context).await.map_err(Into::into)?;
                 Ok(serde_json::to_value(output)?)
             })
         });

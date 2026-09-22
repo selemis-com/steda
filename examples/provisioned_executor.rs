@@ -70,6 +70,8 @@ impl SandboxExecutor {
 }
 
 impl TaskExecutor<AgentTurnInput, AgentTurnOutput> for SandboxExecutor {
+    type Error = Error;
+
     fn execute(
         &self,
         input: AgentTurnInput,

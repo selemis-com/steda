@@ -4,6 +4,9 @@ use thiserror::Error;
 
 use crate::types::TaskId;
 
+/// Boxed error returned by task execution code.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Result type used by Steda.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -86,12 +89,21 @@ pub enum Error {
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    /// Error returned by task execution code outside Steda's own error domain.
+    #[error("{0}")]
+    Task(#[source] BoxError),
+
     /// Catch-all error for cases that do not deserve a dedicated variant.
     #[error("{0}")]
     Other(String),
 }
 
 impl Error {
+    /// Wrap an external task execution error while preserving its source chain.
+    pub fn task(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Task(Box::new(error))
+    }
+
     /// Returns true when the error represents a deliberate task suspension.
     pub const fn is_suspended(&self) -> bool {
         matches!(self, Self::Suspended)

@@ -48,6 +48,8 @@ mod tests {
     }
 
     impl TaskExecutor<(), ()> for CancellableExecutor {
+        type Error = Error;
+
         fn execute(
             &self,
             (): (),
@@ -72,6 +74,8 @@ mod tests {
     }
 
     impl TaskExecutor<i64, i64> for ProvisionedExecutor {
+        type Error = Error;
+
         fn execute(
             &self,
             input: i64,
