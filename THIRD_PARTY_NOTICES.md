@@ -2248,7 +2248,7 @@ Apache License 2.0
 Apache License 2.0
 
 #### Used by
-- [steda]( https://github.com/selemis-com/steda ) 0.1.2
+- [steda]( https://github.com/selemis-com/steda ) 0.1.3
 - [unarray]( https://github.com/cameron1024/unarray ) 0.1.4
 
 #### License
