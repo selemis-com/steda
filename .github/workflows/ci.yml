@@ -392,7 +392,12 @@ jobs:
       - name: Check THIRD_PARTY_NOTICES is up to date
         run: |
           set -euo pipefail
-          make about
+          cargo about generate \
+            -c .github/about.toml \
+            -o THIRD_PARTY_NOTICES.md \
+            .github/about.hbs \
+            --all-features \
+            --locked
           git diff --exit-code -- THIRD_PARTY_NOTICES.md
 
   ci-success:
