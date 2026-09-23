@@ -219,23 +219,32 @@ mod tests {
     }
 
     #[test]
-    fn executions_record_one_bounded_outcome() {
-        let metrics = QueueMetrics::new();
-        TaskExecution::start(metrics.clone()).finish(ExecutionOutcome::Completed);
+    fn bounded_execution_outcomes_update_exactly_one_outcome_counter() {
+        let cases = [
+            ExecutionOutcome::Completed,
+            ExecutionOutcome::Failed,
+            ExecutionOutcome::LeaseLost,
+            ExecutionOutcome::Cancelled,
+            ExecutionOutcome::Suspended,
+        ];
 
-        assert_eq!(metrics.executions(), 1);
-        assert_eq!(metrics.completed_executions(), 1);
-        assert_eq!(metrics.unhandled_executions(), 0);
-    }
+        for (index, outcome) in cases.into_iter().enumerate() {
+            let metrics = QueueMetrics::new();
+            TaskExecution::start(metrics.clone()).finish(outcome);
 
-    #[test]
-    fn lease_loss_is_a_bounded_execution_outcome() {
-        let metrics = QueueMetrics::new();
-        TaskExecution::start(metrics.clone()).finish(ExecutionOutcome::LeaseLost);
+            let counters = [
+                metrics.completed_executions(),
+                metrics.failed_executions(),
+                metrics.lease_lost_executions(),
+                metrics.cancelled_executions(),
+                metrics.suspended_executions(),
+            ];
 
-        assert_eq!(metrics.executions(), 1);
-        assert_eq!(metrics.lease_lost_executions(), 1);
-        assert_eq!(metrics.unhandled_executions(), 0);
+            assert_eq!(metrics.executions(), 1);
+            assert_eq!(metrics.unhandled_executions(), 0);
+            assert_eq!(counters[index], 1);
+            assert_eq!(counters.iter().sum::<u64>(), 1);
+        }
     }
 
     #[test]
